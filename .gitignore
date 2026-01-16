@@ -1,0 +1,7 @@
+# Ignore data folders
+assets/
+labeled_data/
+__pycache__/
+*.pth
+.DS_Store
+.vscode/
