@@ -137,6 +137,9 @@ def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Starting training on: {device}")
 
+    # Open debug file
+    debug_file = open("debug.txt", "w")
+
     # יצירת התיקייה לשמירת המודלים אם אינה קיימת
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -195,6 +198,7 @@ def main(args):
             for i in range(targets.size(0)):
                 if predicted[i] == targets[i]:
                     really_correct_right_now += 1
+                    else print(f"Mismatch at index {i}: predicted {predicted[i].item()}, target {targets[i].item()}", file=debug_file)
             correct_right_now = 0
             correct_right_now = (predicted == targets).sum().item()
             print(f"total: {targets.size(0)}, correct_right_now: {correct_right_now}, really_correct_right_now: {really_correct_right_now}")
@@ -213,17 +217,19 @@ def main(args):
         
         if first_preds is not None and first_targets is not None:
             print("First 5 predictions and targets:")
+            print(f"Epoch {epoch+1} First 5 predictions and targets:", file=debug_file)
             for i in range(5):
                 pred_name = id_to_piece.get(first_preds[i], 'unknown')
                 target_name = id_to_piece.get(first_targets[i], 'unknown')
                 print(f"  Pred: {pred_name}, Target: {target_name}")
+                print(f"  Pred: {pred_name}, Target: {target_name}", file=debug_file)
         
         # שמירת המודל בכל אפוק (או רק בסוף)
         save_path = os.path.join(args.output_dir, f"model_epoch_{epoch+1}.pth")
         torch.save(model.state_dict(), save_path)
         print(f"Model saved to {save_path}")
 
-if __name__ == "__main__":
+    debug_file.close()
     # הגדרת הפרמטרים שהסקריפט יודע לקבל מבחוץ
     parser = argparse.ArgumentParser(description="Train Chess Piece Classifier")
     
