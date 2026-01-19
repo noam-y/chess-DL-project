@@ -153,9 +153,17 @@ def main(args):
         num_workers=4 # יעיל יותר בקלאסטר
     )
 
-    # Model, Loss, Optimizer
+# Model, Loss, Optimizer
     model = PieceClassifier(num_classes=13).to(device)
-    criterion = nn.CrossEntropyLoss()
+
+    class_weights = torch.ones(13) 
+    
+    # low weight for empty class to reduce its influence relative to pieces
+    class_weights[0] = 0.1 
+    class_weights = class_weights.to(device)
+
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     # Training Loop
@@ -245,15 +253,5 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
 
     args = parser.parse_args()
-    # נניח ש-Index 0 הוא ריק, ו-1-12 הם הכלים
-    class_weights = torch.ones(13)
-    
-    # low weight for empty class to reduce its influence relative to pieces
-    class_weights[0] = 0.1 
-    
-    class_weights = class_weights.to(device)
-
-    # 2. Update the Loss Function
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
     
     main(args)
