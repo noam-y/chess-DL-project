@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, default_collate
+from sklearn.metrics import classification_report, confusion_matrix
 from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
@@ -50,8 +51,6 @@ class ChessPatchesDataset(Dataset):
         dataframes = []
         for csv_path in csv_files:
             try:
-                # הנחה: מבנה התיקיות הוא כמו ב-Colab
-                # אם בקלאסטר המבנה שונה, יש להתאים את השורה הבאה
                 game_folder = os.path.dirname(csv_path)
                 images_dir = os.path.join(game_folder, 'tagged_images') 
                 
@@ -192,6 +191,35 @@ def main(args):
             
             loop.set_postfix(loss=loss.item(), acc=100.*correct/total)
 
+
+            # נאסוף את כל התחזיות של האפוק האחרון
+    all_preds = []
+    all_targets = []
+
+    model.eval() # חשוב! כדי לנטרל Dropout
+    with torch.no_grad():
+        for batch_data in train_loader:
+            if batch_data is None: continue
+            boards, labels = batch_data
+            inputs = boards.view(-1, 3, 60, 60).to(device)
+            targets = labels.view(-1).to(device)
+            
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs.data, 1)
+            
+            all_preds.extend(predicted.cpu().numpy())
+            all_targets.extend(targets.cpu().numpy())
+
+        # הדפסת דוח מפורט
+        # Target names: 0=Empty, 1=P, 2=N, etc... (לפי המילון שלך)
+        print("\nDetailed Report:")
+        print(classification_report(all_targets, all_preds, zero_division=0))
+
+        # הדפסת מטריצת בלבול (שורות=אמת, עמודות=חיזוי)
+        print("Confusion Matrix (Row=True, Col=Pred):")
+        print(confusion_matrix(all_targets, all_preds))
+
+
         # סוף אפוק - הדפסה ושמירה
         epoch_loss = running_loss / len(train_loader)
         epoch_acc = 100. * correct / total
@@ -201,6 +229,7 @@ def main(args):
         save_path = os.path.join(args.output_dir, f"model_epoch_{epoch+1}.pth")
         torch.save(model.state_dict(), save_path)
         print(f"Model saved to {save_path}")
+
 
 if __name__ == "__main__":
     # הגדרת הפרמטרים שהסקריפט יודע לקבל מבחוץ
