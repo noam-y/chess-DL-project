@@ -17,7 +17,7 @@ Before starting, ensure you have the following on your local machine:
 ### Connect via SSH
 Open your terminal and connect to the cluster:
 ```bash
-ssh <your_username>@scluster.bgu.ac.il
+ssh <your_username>@slurm.bgu.ac.il
 
 ## Create the Conda Environment:
 
