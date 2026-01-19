@@ -160,11 +160,14 @@ def main(args):
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     # Training Loop
+    id_to_piece = {0: 'empty', 1: 'P', 2: 'N', 3: 'B', 4: 'R', 5: 'Q', 6: 'K', 7: 'p', 8: 'n', 9: 'b', 10: 'r', 11: 'q', 12: 'k'}
     for epoch in range(args.epochs):
         model.train()
         running_loss = 0.0
         correct = 0
         total = 0
+        first_preds = None
+        first_targets = None
         
         loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
         
@@ -190,12 +193,23 @@ def main(args):
             total += targets.size(0)
             correct += (predicted == targets).sum().item()
             
+            if first_preds is None and predicted.size(0) >= 5:
+                first_preds = predicted[:5].cpu().numpy()
+                first_targets = targets[:5].cpu().numpy()
+            
             loop.set_postfix(loss=loss.item(), acc=100.*correct/total)
 
         # סוף אפוק - הדפסה ושמירה
         epoch_loss = running_loss / len(train_loader)
         epoch_acc = 100. * correct / total
         print(f"Epoch {epoch+1} Summary: Loss={epoch_loss:.4f}, Accuracy={epoch_acc:.2f}%")
+        
+        if first_preds is not None and first_targets is not None:
+            print("First 5 predictions and targets:")
+            for i in range(5):
+                pred_name = id_to_piece.get(first_preds[i], 'unknown')
+                target_name = id_to_piece.get(first_targets[i], 'unknown')
+                print(f"  Pred: {pred_name}, Target: {target_name}")
         
         # שמירת המודל בכל אפוק (או רק בסוף)
         save_path = os.path.join(args.output_dir, f"model_epoch_{epoch+1}.pth")
