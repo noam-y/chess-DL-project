@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, default_collate
+from sklearn.metrics import classification_report, confusion_matrix
 from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
@@ -50,8 +51,6 @@ class ChessPatchesDataset(Dataset):
         dataframes = []
         for csv_path in csv_files:
             try:
-                # הנחה: מבנה התיקיות הוא כמו ב-Colab
-                # אם בקלאסטר המבנה שונה, יש להתאים את השורה הבאה
                 game_folder = os.path.dirname(csv_path)
                 images_dir = os.path.join(game_folder, 'tagged_images') 
                 
@@ -62,6 +61,7 @@ class ChessPatchesDataset(Dataset):
                 df.columns = df.columns.str.strip()
                 if 'from_frame' in df.columns and 'fen' in df.columns:
                     df['image_dir_path'] = images_dir
+                    df['source_csv'] = csv_path
                     dataframes.append(df)
             except Exception as e:
                 print(f"Error reading {csv_path}: {e}")
@@ -105,7 +105,13 @@ class ChessPatchesDataset(Dataset):
             return patches, labels
 
         except Exception as e:
-            print(f"Error loading index {idx}: {e}")
+            if isinstance(self.full_df, pd.DataFrame):
+                bad_row = self.full_df.iloc[idx]
+                print(f"\nCRITICAL DEBUG INFO:")
+                print(f"Index: {idx}")
+                print(f"Source CSV: {bad_row.get('source_csv', 'Unknown')}") # זה יגלה את הסוד!
+                print(f"Frame ID: {bad_row.get('from_frame', 'Unknown')}")
+                print(f"Looking for file: {img_path}")
             return None
 
 # --- 3. Model Definition ---
@@ -154,9 +160,17 @@ def main(args):
         num_workers=4 # יעיל יותר בקלאסטר
     )
 
-    # Model, Loss, Optimizer
+# Model, Loss, Optimizer
     model = PieceClassifier(num_classes=13).to(device)
-    criterion = nn.CrossEntropyLoss()
+
+    class_weights = torch.ones(13) 
+    
+    # low weight for empty class to reduce its influence relative to pieces
+    class_weights[0] = 0.1 
+    class_weights = class_weights.to(device)
+
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     # Training Loop
@@ -192,6 +206,35 @@ def main(args):
             
             loop.set_postfix(loss=loss.item(), acc=100.*correct/total)
 
+
+            # נאסוף את כל התחזיות של האפוק האחרון
+    all_preds = []
+    all_targets = []
+
+    model.eval() # חשוב! כדי לנטרל Dropout
+    with torch.no_grad():
+        for batch_data in train_loader:
+            if batch_data is None: continue
+            boards, labels = batch_data
+            inputs = boards.view(-1, 3, 60, 60).to(device)
+            targets = labels.view(-1).to(device)
+            
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs.data, 1)
+            
+            all_preds.extend(predicted.cpu().numpy())
+            all_targets.extend(targets.cpu().numpy())
+
+        # הדפסת דוח מפורט
+        # Target names: 0=Empty, 1=P, 2=N, etc... (לפי המילון שלך)
+        print("\nDetailed Report:")
+        print(classification_report(all_targets, all_preds, zero_division=0))
+
+        # הדפסת מטריצת בלבול (שורות=אמת, עמודות=חיזוי)
+        print("Confusion Matrix (Row=True, Col=Pred):")
+        print(confusion_matrix(all_targets, all_preds))
+
+
         # סוף אפוק - הדפסה ושמירה
         epoch_loss = running_loss / len(train_loader)
         epoch_acc = 100. * correct / total
@@ -201,6 +244,7 @@ def main(args):
         save_path = os.path.join(args.output_dir, f"model_epoch_{epoch+1}.pth")
         torch.save(model.state_dict(), save_path)
         print(f"Model saved to {save_path}")
+
 
 if __name__ == "__main__":
     # הגדרת הפרמטרים שהסקריפט יודע לקבל מבחוץ
