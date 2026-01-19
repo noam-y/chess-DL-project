@@ -191,6 +191,13 @@ def main(args):
             running_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
             total += targets.size(0)
+            really_correct_right_now = 0
+            for i in range(targets.size(0)):
+                if predicted[i] == targets[i]:
+                    really_correct_right_now += 1
+            correct_right_now = 0
+            correct_right_now = (predicted == targets).sum().item()
+            print(f"total: {targets.size(0)}, correct_right_now: {correct_right_now}, really_correct_right_now: {really_correct_right_now}")
             correct += (predicted == targets).sum().item()
             
             if first_preds is None and predicted.size(0) >= 5:
