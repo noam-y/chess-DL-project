@@ -32,29 +32,31 @@ source activate chess_env
 
 # 4. Install dependencies
 pip install torch torchvision pandas numpy Pillow tqdm
+```
+
 
 ---
 
 ## 🚀 Data management
 
-# Navigate to the assets folder
+### Navigate to the assets folder
 cd ~/chess-DL-project/assets
 
-# Create the target directory and move the zip there
+### Create the target directory and move the zip there
 mkdir -p labeled_data
 mv *.zip labeled_data/
 cd labeled_data
 
-# Extract all sub-zips into their own folders
+### Extract all sub-zips into their own folders
 for f in *.zip; do
   dirname="${f%.zip}"      # Get filename without extension
   unzip -o "$f" -d "$dirname"  # Unzip into a folder with that name
 done
 
-# Cleanup: Remove the zip files to save space
+### Cleanup: Remove the zip files to save space
 rm *.zip
 
-## Runnning the training - finally!
+### Runnning the training - finally!
 srun --pty -p rtx2080 --qos=course --gres=gpu:1 --mem=16G --time=1:00:00 /bin/bash
 module load anaconda
 source activate chess_env
