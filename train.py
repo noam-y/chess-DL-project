@@ -198,7 +198,8 @@ def main(args):
             for i in range(targets.size(0)):
                 if predicted[i] == targets[i]:
                     really_correct_right_now += 1
-                    else print(f"Mismatch at index {i}: predicted {predicted[i].item()}, target {targets[i].item()}", file=debug_file)
+                else:
+                    print(f"Mismatch at index {i}: predicted {predicted[i].item()}, target {targets[i].item()}", file=debug_file)
             correct_right_now = 0
             correct_right_now = (predicted == targets).sum().item()
             print(f"total: {targets.size(0)}, correct_right_now: {correct_right_now}, really_correct_right_now: {really_correct_right_now}")
