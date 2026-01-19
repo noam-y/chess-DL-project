@@ -61,6 +61,7 @@ class ChessPatchesDataset(Dataset):
                 df.columns = df.columns.str.strip()
                 if 'from_frame' in df.columns and 'fen' in df.columns:
                     df['image_dir_path'] = images_dir
+                    df['source_csv'] = csv_path
                     dataframes.append(df)
             except Exception as e:
                 print(f"Error reading {csv_path}: {e}")
@@ -104,7 +105,13 @@ class ChessPatchesDataset(Dataset):
             return patches, labels
 
         except Exception as e:
-            print(f"Error loading index {idx}: {e}")
+            if isinstance(self.full_df, pd.DataFrame):
+                bad_row = self.full_df.iloc[idx]
+                print(f"\nCRITICAL DEBUG INFO:")
+                print(f"Index: {idx}")
+                print(f"Source CSV: {bad_row.get('source_csv', 'Unknown')}") # זה יגלה את הסוד!
+                print(f"Frame ID: {bad_row.get('from_frame', 'Unknown')}")
+                print(f"Looking for file: {img_path}")
             return None
 
 # --- 3. Model Definition ---
