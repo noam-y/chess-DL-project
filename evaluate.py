@@ -19,6 +19,7 @@ except ImportError:
     sys.exit(1)
 
 IMG_SIZE = 480
+PATCH_SIZE = 60
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 PIECE_TO_ID = {
@@ -104,14 +105,13 @@ def main(args):
     print(f"Device: {DEVICE}")
 
     dataset = EvalDataset(csv_path, args.test_dir)
-    loader = DataLoader(dataset, batch_size=16, shuffle=False)
+    loader = DataLoader(dataset, batch_size=4, shuffle=False)
     
     model = PieceClassifier().to(DEVICE)
-    
     try:
         state_dict = torch.load(args.model_path, map_location=DEVICE)
         model.load_state_dict(state_dict)
-        print("Weights loaded.")
+        print("Weights loaded successfully.")
     except Exception as e:
         print(f"Error loading weights: {e}")
         return
@@ -124,16 +124,22 @@ def main(args):
     perfect_boards = 0
     results = [] 
 
+    print("Running Inference...")
     with torch.no_grad():
         for images, true_fens, filenames in tqdm(loader):
             images = images.to(DEVICE)
+            Batch_Size = images.shape[0]
+
+            patches = images.unfold(2, PATCH_SIZE, PATCH_SIZE).unfold(3, PATCH_SIZE, PATCH_SIZE)
+            patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous().view(-1, 3, PATCH_SIZE, PATCH_SIZE)
             
-            outputs = model(images) 
-            preds = torch.argmax(outputs, dim=1) 
+            outputs = model(patches)
+            _, preds_flat = torch.argmax(outputs, dim=1)
             
-            for i in range(len(filenames)):
-                pred_grid = preds[i]
-                pred_fen_str = prediction_to_fen(pred_grid)
+            preds_grid = preds_flat.view(Batch_Size, 8, 8)
+            
+            for i in range(Batch_Size):
+                pred_fen_str = prediction_to_fen(preds_grid[i])
                 true_fen_str = true_fens[i]
                 
                 correct, is_perfect = compare_fens(true_fen_str, pred_fen_str)
