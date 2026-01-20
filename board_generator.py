@@ -5,13 +5,12 @@ from torchvision import transforms
 from torchvision.utils import save_image
 from PIL import Image
 
-# --- Configuration ---
 INPUT_DIR = 'BASE_TO_AUGMENT'
 OUTPUT_DIR = 'new_augmented_data'
 IMG_SIZE = 480
-PATCH_SIZE = 60  
+PATCH_SIZE = 60 
 
-def augment_chess_data():
+def augment_data():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     transform = transforms.Compose([
@@ -30,43 +29,41 @@ def augment_chess_data():
         img = Image.open(img_path).convert('RGB')
         tensors.append(transform(img))
     
-    batch = torch.stack(tensors) 
+    # Shape: (Batch_Size, 3, 480, 480)
+    batch = torch.stack(tensors)
     B, C, H, W = batch.shape
     
-    print(f"Loaded batch shape: {batch.shape}")
+    print(f"Processing batch: {batch.shape}")
 
-    # Unfold
+    # 2. Extract Patches (Unfold)
+    # Result: (B, Channels*PatchH*PatchW, Num_Patches)
     patches = F.unfold(batch, kernel_size=PATCH_SIZE, stride=PATCH_SIZE)
-    num_patches = patches.shape[2]
+    num_patches = patches.shape[2] 
 
-    mixed_patches_list = []
-    
+    # 3. Shuffle Patches (Inter-image mixing)
+    mixed_list = []
     for i in range(B):
-        source_indices = torch.randint(0, B, (num_patches,))
+        source_idx = torch.randint(0, B, (num_patches,))
         
-        # --- התיקון נמצא בשורה הבאה ---
-        # השליפה מחזירה (64, 10800), אנחנו צריכים להפוך ל-(10800, 64)
-        # אז הוספנו .t() (transpose) בסוף
-        mixed_img_patches = patches[source_indices, :, torch.arange(num_patches)].t()
-        
-        mixed_patches_list.append(mixed_img_patches)
+        # Advanced indexing: Result is (Num_Patches, Flattened_Patch_Size)
+        # We use .t() to transpose back to (Flattened_Patch_Size, Num_Patches) for Fold
+        mixed = patches[source_idx, :, torch.arange(num_patches)].t()
+        mixed_list.append(mixed)
 
-    mixed_batch_unfolded = torch.stack(mixed_patches_list)
+    mixed_batch = torch.stack(mixed_list)
 
-    # Fold
     new_images = F.fold(
-        mixed_batch_unfolded, 
+        mixed_batch, 
         output_size=(H, W), 
         kernel_size=PATCH_SIZE, 
         stride=PATCH_SIZE
     )
 
-    print(f"Saving {B} augmented images to '{OUTPUT_DIR}'...")
+    print(f"Saving {B} images to {OUTPUT_DIR}...")
     for i in range(B):
-        output_path = os.path.join(OUTPUT_DIR, f"aug_{i}_{files[i]}")
-        save_image(new_images[i], output_path)
-
+        save_image(new_images[i], os.path.join(OUTPUT_DIR, f"aug_{i}.png"))
+    
     print("Done.")
 
 if __name__ == "__main__":
-    augment_chess_data()
+    augment_data()
