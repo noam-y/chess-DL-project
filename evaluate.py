@@ -130,11 +130,16 @@ def main(args):
             images = images.to(DEVICE)
             Batch_Size = images.shape[0]
 
+            # Cut images into patches
             patches = images.unfold(2, PATCH_SIZE, PATCH_SIZE).unfold(3, PATCH_SIZE, PATCH_SIZE)
             patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous().view(-1, 3, PATCH_SIZE, PATCH_SIZE)
             
+            # Inference
             outputs = model(patches)
-            _, preds_flat = torch.argmax(outputs, dim=1)
+            
+            # --- TIKUN (Correction) ---
+            preds_flat = torch.argmax(outputs, dim=1) # Returns just the indices
+            # --------------------------
             
             preds_grid = preds_flat.view(Batch_Size, 8, 8)
             
