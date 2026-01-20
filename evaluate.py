@@ -27,7 +27,7 @@ except ImportError:
 # --- 2. הגדרות ומיפוי הפוך ---
 TEST_DIR = 'new_augmented_data'
 CSV_PATH = os.path.join(TEST_DIR, 'augmented_ground_truth.csv')
-MODEL_PATH = 'best_model.pth' # הנתיב לקובץ המשקולות ששמרת
+MODEL_PATH = '/checkpoints/best_model.pth' # הנתיב לקובץ המשקולות ששמרת
 IMG_SIZE = 480
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
