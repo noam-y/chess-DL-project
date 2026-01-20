@@ -11,6 +11,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
+from ood_detector import OODDetector
 
 # --- 1. Utility Functions ---
 def fen_to_tensor(fen_string):
@@ -74,6 +75,7 @@ class ChessPatchesDataset(Dataset):
 
         self.resize = transforms.Resize((480, 480))
         self.to_tensor = transforms.ToTensor()
+        self.ood_detector = None  # Lazy initialization
 
     def __len__(self):
         return len(self.full_df)
@@ -89,6 +91,16 @@ class ChessPatchesDataset(Dataset):
             img_path = os.path.join(img_dir, img_name)
             
             image = Image.open(img_path).convert("RGB")
+            
+            # --- OOD Check ---
+            if self.ood_detector is None:
+                self.ood_detector = OODDetector()
+            
+            if self.ood_detector.is_ood(np.array(image)):
+                # print(f"Skipping OOD image: {img_name}")
+                return None
+            # -----------------
+            
             label_board = fen_to_tensor(fen_label)
 
             # Preprocessing
