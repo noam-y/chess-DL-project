@@ -80,8 +80,9 @@ def infer_tile(model, tile_tensor, device, model_type, centroids=None, ood_thres
             is_ood = False
             if centroids is not None:
                 embedding = F.normalize(embedding, p=2, dim=1)
-                dists = torch.cdist(embedding, centroids.unsqueeze(0), p=2).squeeze(0)
-                min_dist, pred_idx = torch.min(dists, dim=0)
+                # Compute distances (1, 13)
+                dists = torch.cdist(embedding, centroids, p=2)
+                min_dist, pred_idx = torch.min(dists, dim=1)
                 if min_dist.item() > ood_threshold:
                     is_ood = True
                 pred_label = pred_idx.item()
