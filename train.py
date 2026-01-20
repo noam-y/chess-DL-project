@@ -74,9 +74,13 @@ class ChessPatchesDataset(Dataset):
         else:
             self.full_df = pd.DataFrame()
 
-        self.resize = transforms.Resize((480, 480))
-        self.to_tensor = transforms.ToTensor()
-
+        self.transform = transforms.Compose([
+            transforms.Resize((480, 480)),
+            transforms.ToTensor(),
+            # adding noise and color jitter to combat overfitting
+            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+            transforms.RandomRotation(5), 
+        ])
     def __len__(self):
         return len(self.full_df)
 
