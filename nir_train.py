@@ -7,6 +7,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, models
+from torchvision.models import ResNet18_Weights
 from PIL import Image
 from tqdm import tqdm
 from sklearn.metrics import classification_report, confusion_matrix
@@ -57,7 +58,8 @@ class ResNetWithEmbeddings(nn.Module):
     def __init__(self, num_classes=13):
         super(ResNetWithEmbeddings, self).__init__()
         # Load pretrained ResNet18
-        base_model = models.resnet18(pretrained=True)
+        # Use weights instead of pretrained=True to avoid deprecation warnings
+        base_model = models.resnet18(weights=ResNet18_Weights.DEFAULT)
         
         # Remove the final FC layer to get the feature extractor
         self.backbone = nn.Sequential(*list(base_model.children())[:-1])
