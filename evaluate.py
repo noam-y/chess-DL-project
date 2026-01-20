@@ -1,4 +1,5 @@
 import os
+import sys
 import argparse
 import torch
 import pandas as pd
@@ -8,16 +9,14 @@ from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
 
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+
 try:
-    from train import ChessModel 
+    from train import PieceClassifier
 except ImportError:
-    print("Warning: Could not import ChessModel from train.py. Using dummy placeholder.")
-    class ChessModel(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.conv = torch.nn.Conv2d(3, 13, kernel_size=1) 
-        def forward(self, x):
-            return torch.randn(x.shape[0], 13, 8, 8)
+    print("Error: Could not import PieceClassifier from train.py")
+    sys.exit(1)
 
 IMG_SIZE = 480
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -27,9 +26,8 @@ PIECE_TO_ID = {
     'p': 7, 'n': 8, 'b': 9, 'r': 10, 'q': 11, 'k': 12
 }
 ID_TO_PIECE = {v: k for k, v in PIECE_TO_ID.items()}
-ID_TO_PIECE[0] = '1' 
+ID_TO_PIECE[0] = '1'
 
-# --- 3. פונקציות עזר (ללא שינוי) ---
 def prediction_to_fen(pred_tensor):
     board = pred_tensor.cpu().numpy()
     rows_fen = []
@@ -72,7 +70,6 @@ def compare_fens(true_fen, pred_fen):
     is_perfect = (correct_count == 64)
     return correct_count, is_perfect
 
-# --- 4. Dataset (ללא שינוי) ---
 class EvalDataset(Dataset):
     def __init__(self, csv_file, root_dir):
         self.df = pd.read_csv(csv_file)
@@ -92,9 +89,7 @@ class EvalDataset(Dataset):
         image = self.transform(image)
         return image, row['fen'], row['filename']
 
-# --- 5. Main Loop (מעודכן לקבלת args) ---
 def main(args):
-    # בדיקת תקינות נתיבים
     csv_path = os.path.join(args.test_dir, args.csv_name)
     if not os.path.exists(csv_path):
         print(f"Error: CSV file not found at {csv_path}")
@@ -104,35 +99,31 @@ def main(args):
         print(f"Error: Model weights not found at {args.model_path}")
         return
 
-    print(f"--- Evaluation Settings ---")
     print(f"Model: {args.model_path}")
     print(f"Data:  {args.test_dir}")
-    print(f"CSV:   {csv_path}")
     print(f"Device: {DEVICE}")
-    print(f"---------------------------")
 
     dataset = EvalDataset(csv_path, args.test_dir)
     loader = DataLoader(dataset, batch_size=16, shuffle=False)
     
-    model = ChessModel().to(DEVICE)
+    model = PieceClassifier().to(DEVICE)
     
-    # loading model path from cli
     try:
         state_dict = torch.load(args.model_path, map_location=DEVICE)
         model.load_state_dict(state_dict)
-        print("Model weights loaded successfully.")
+        print("Weights loaded.")
     except Exception as e:
-        print(f"Error loading model weights: {e}")
+        print(f"Error loading weights: {e}")
         return
 
     model.eval()
+
     total_squares = 0
     correct_squares = 0
     total_boards = 0
     perfect_boards = 0
     results = [] 
 
-    print("Running inference...")
     with torch.no_grad():
         for images, true_fens, filenames in tqdm(loader):
             images = images.to(DEVICE)
@@ -161,45 +152,23 @@ def main(args):
                     'is_perfect': is_perfect
                 })
 
-    # סיכום
     piece_acc = 100 * correct_squares / total_squares if total_squares > 0 else 0
     board_acc = 100 * perfect_boards / total_boards if total_boards > 0 else 0
     
-    print("\n" + "="*40)
-    print(f"FINAL RESULTS")
-    print("="*40)
+    print("-" * 30)
     print(f"Piece Accuracy: {piece_acc:.2f}%")
     print(f"Board Accuracy: {board_acc:.2f}%")
-    print("="*40)
+    print("-" * 30)
 
-    # שמירה
     output_csv = "evaluation_results.csv"
     pd.DataFrame(results).to_csv(output_csv, index=False)
-    print(f"Detailed results saved to {output_csv}")
+    print(f"Results saved to {output_csv}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate Chess Model")
-    
-    parser.add_argument(
-        "--model_path", 
-        type=str, 
-        required=True, 
-        help="Path to the .pth model file"
-    )
-    
-    parser.add_argument(
-        "--test_dir", 
-        type=str, 
-        default="new_augmented_data", 
-        help="Directory containing test images"
-    )
-    
-    parser.add_argument(
-        "--csv_name", 
-        type=str, 
-        default="augmented_ground_truth.csv", 
-        help="Name of the ground truth CSV file inside test_dir"
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_path", type=str, required=True)
+    parser.add_argument("--test_dir", type=str, default="new_augmented_data")
+    parser.add_argument("--csv_name", type=str, default="augmented_ground_truth.csv")
 
     args = parser.parse_args()
     main(args)
