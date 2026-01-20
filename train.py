@@ -9,6 +9,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, default_collate
 from sklearn.metrics import classification_report, confusion_matrix
 from torchvision import transforms
+import torchvision.models as models
 from PIL import Image
 from tqdm import tqdm
 
@@ -50,6 +51,8 @@ class ChessPatchesDataset(Dataset):
 
         dataframes = []
         for csv_path in csv_files:
+            if 'game6' in csv_path:
+                continue
             try:
                 game_folder = os.path.dirname(csv_path)
                 images_dir = os.path.join(game_folder, 'tagged_images') 
@@ -72,9 +75,13 @@ class ChessPatchesDataset(Dataset):
         else:
             self.full_df = pd.DataFrame()
 
-        self.resize = transforms.Resize((480, 480))
-        self.to_tensor = transforms.ToTensor()
-
+        self.transform = transforms.Compose([
+            transforms.Resize((480, 480)),
+            transforms.ToTensor(),
+            # adding noise and color jitter to comba
+            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+            transforms.RandomRotation(5), 
+        ])
     def __len__(self):
         return len(self.full_df)
 
@@ -114,36 +121,24 @@ class ChessPatchesDataset(Dataset):
                 print(f"Looking for file: {img_path}")
             return None
 
-# --- 3. Model Definition ---
 class PieceClassifier(nn.Module):
     def __init__(self, num_classes=13):
         super(PieceClassifier, self).__init__()
-        self.conv1 = nn.Sequential(nn.Conv2d(3, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d(2))
-        self.conv2 = nn.Sequential(nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(), nn.MaxPool2d(2))
-        self.conv3 = nn.Sequential(nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(), nn.MaxPool2d(2))
-        self.fc_input_dim = 128 * 7 * 7
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(self.fc_input_dim, 512),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, num_classes)
-        )
+        # using pretrained ResNet18
+        self.model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        
+        num_ftrs = self.model.fc.in_features
+        self.model.fc = nn.Linear(num_ftrs, num_classes)
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.fc(x)
-        return x
-
+        return self.model(x)
+    
 # --- 4. Main Training Function ---
 def main(args):
     # הגדרת Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Starting training on: {device}")
 
-    # יצירת התיקייה לשמירת המודלים אם אינה קיימת
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Dataset & DataLoader
