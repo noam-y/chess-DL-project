@@ -338,7 +338,12 @@ def main(args):
             
     avg_dist = np.mean(distances)
     max_dist = np.max(distances)
+    p95_dist = np.percentile(distances, 95)
+    p99_dist = np.percentile(distances, 99)
+    
     print(f"Average Distance to Nearest Centroid: {avg_dist:.4f}")
+    print(f"95th Percentile Distance: {p95_dist:.4f}")
+    print(f"99th Percentile Distance: {p99_dist:.4f}")
     print(f"Max Distance to Nearest Centroid: {max_dist:.4f}")
     print(f"Flagged as OOD (Threshold > {args.ood_threshold}): {ood_count} / {len(val_dataset)} ({100.0 * ood_count / len(val_dataset):.2f}%)")
 
@@ -352,7 +357,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
-    parser.add_argument("--ood_threshold", type=float, default=1.0, help="Distance threshold for OOD detection")
+    parser.add_argument("--ood_threshold", type=float, default=0.9, help="Distance threshold for OOD detection")
     parser.add_argument("--device", type=str, default="auto", help="Device to use: 'auto', 'cuda', 'cpu'")
 
     args = parser.parse_args()
