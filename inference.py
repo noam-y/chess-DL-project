@@ -210,7 +210,7 @@ def main():
     # cbi.generate_image returns True on success, saves to path
     print(f"Generating FEN diagram using chessboard-image...")
     cbi.generate_image(
-        fen_str=fen,
+        fen=fen,
         output_path=output_filename,
         size=480,
         show_coordinates=True
@@ -238,7 +238,7 @@ def main():
         # Or re-generate without coordinates for the overlay logic.
         
         cbi.generate_image(
-            fen_str=fen,
+            fen=fen,
             output_path=output_filename,
             size=480,
             show_coordinates=False
