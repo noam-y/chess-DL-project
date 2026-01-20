@@ -239,12 +239,15 @@ def main(args):
 
         # הדפסת דוח מפורט
         # Target names: 0=Empty, 1=P, 2=N, etc... (לפי המילון שלך)
-        print("\nDetailed Report:")
-        print(classification_report(all_targets, all_preds, zero_division=0))
+        if len(all_targets) > 0:
+            print("\nDetailed Report:")
+            print(classification_report(all_targets, all_preds, zero_division=0))
 
-        # הדפסת מטריצת בלבול (שורות=אמת, עמודות=חיזוי)
-        print("Confusion Matrix (Row=True, Col=Pred):")
-        print(confusion_matrix(all_targets, all_preds))
+            # הדפסת מטריצת בלבול (שורות=אמת, עמודות=חיזוי)
+            print("Confusion Matrix (Row=True, Col=Pred):")
+            print(confusion_matrix(all_targets, all_preds))
+        else:
+            print("\nWarning: No predictions were made (possibly all images were filtered as OOD or dataset is empty).")
 
 
         # סוף אפוק - הדפסה ושמירה
