@@ -11,6 +11,7 @@ from torchvision.models import ResNet18_Weights
 from PIL import Image
 from tqdm import tqdm
 from sklearn.metrics import classification_report, confusion_matrix
+import numpy as np
 
 # --- 1. Utility & Configuration ---
 PIECE_TO_ID = {
@@ -126,7 +127,56 @@ def batch_hard_triplet_loss(embeddings, labels, margin=1.0, device='cpu'):
         
     return loss
 
-# --- 5. Main Training Function ---
+# --- 5. Centroid Computation & OOD Logic ---
+def compute_centroids(model, dataloader, device, num_classes=13):
+    print("Computing class centroids...")
+    model.eval()
+    
+    centroids = torch.zeros(num_classes, 512).to(device)
+    class_counts = torch.zeros(num_classes).to(device)
+    
+    with torch.no_grad():
+        for images, labels in tqdm(dataloader, desc="Computing Centroids"):
+            images = images.to(device)
+            labels = labels.to(device)
+            
+            _, embeddings = model(images)
+            embeddings = F.normalize(embeddings, p=2, dim=1)
+            
+            for i in range(len(labels)):
+                label = labels[i]
+                centroids[label] += embeddings[i]
+                class_counts[label] += 1
+                
+    # Normalize
+    for c in range(num_classes):
+        if class_counts[c] > 0:
+            centroids[c] /= class_counts[c]
+            # Re-normalize centroid to unit sphere
+            centroids[c] = F.normalize(centroids[c].unsqueeze(0), p=2, dim=1).squeeze(0)
+            
+    return centroids
+
+def predict_with_ood(model, centroids, image, ood_threshold=1.0, device='cpu'):
+    """
+    Predicts class or returns 'OOD' if distance to nearest centroid > ood_threshold.
+    """
+    model.eval()
+    with torch.no_grad():
+        _, embedding = model(image.unsqueeze(0).to(device))
+        embedding = F.normalize(embedding, p=2, dim=1)
+        
+        # Calculate distances to all centroids
+        dists = torch.cdist(embedding, centroids.unsqueeze(0), p=2).squeeze(0) # (num_classes,)
+        
+        min_dist, pred_idx = torch.min(dists, dim=0)
+        
+        if min_dist.item() > ood_threshold:
+            return "OOD", min_dist.item()
+        else:
+            return ID_TO_PIECE[pred_idx.item()], min_dist.item()
+
+# --- 6. Main Training Function ---
 def main(args):
     # Device
     if args.device == "auto":
@@ -233,7 +283,12 @@ def main(args):
         torch.save(model.state_dict(), save_path)
         print(f"Model saved to {save_path}")
 
-    # Final Evaluation
+    # Compute and Save Centroids
+    centroids = compute_centroids(model, train_loader, device)
+    torch.save(centroids, os.path.join(args.output_dir, "centroids.pt"))
+    print(f"Centroids saved to {os.path.join(args.output_dir, 'centroids.pt')}")
+
+    # Final Evaluation (Classification)
     print("\nRunning Final Evaluation...")
     model.eval()
     all_preds = []
@@ -261,6 +316,31 @@ def main(args):
     print("Confusion Matrix:")
     print(confusion_matrix(all_targets, all_preds, labels=unique_labels))
 
+    # OOD Demonstration (on training set, just to show stats)
+    print(f"\nOOD Statistics (Threshold: {args.ood_threshold}):")
+    distances = []
+    ood_count = 0
+    with torch.no_grad():
+         for images, labels in tqdm(train_loader, desc="Checking OOD stats"):
+            images = images.to(device)
+            _, embeddings = model(images)
+            embeddings = F.normalize(embeddings, p=2, dim=1)
+            
+            # Batch distance calculation
+            # dists: (batch, num_classes)
+            dists = torch.cdist(embeddings, centroids.unsqueeze(0), p=2).squeeze(0)
+            min_dists, _ = torch.min(dists, dim=1)
+            
+            distances.extend(min_dists.cpu().numpy())
+            ood_count += (min_dists > args.ood_threshold).sum().item()
+            
+    avg_dist = np.mean(distances)
+    max_dist = np.max(distances)
+    print(f"Average Distance to Nearest Centroid: {avg_dist:.4f}")
+    print(f"Max Distance to Nearest Centroid: {max_dist:.4f}")
+    print(f"Flagged as OOD (Threshold > {args.ood_threshold}): {ood_count} / {len(dataset)} ({100.0 * ood_count / len(dataset):.2f}%)")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train ResNet with Triplet Loss on Chess Tiles")
     
@@ -270,6 +350,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
+    parser.add_argument("--ood_threshold", type=float, default=1.0, help="Distance threshold for OOD detection")
     parser.add_argument("--device", type=str, default="auto", help="Device to use: 'auto', 'cuda', 'cpu'")
 
     args = parser.parse_args()
