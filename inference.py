@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from torchvision import transforms
+import chessboard_image as cbi
 
 # Import models from their respective files to avoid duplication
 try:
@@ -29,15 +30,15 @@ except ImportError:
 # --- Utils ---
 
 def get_latest_epoch_model(checkpoints_dir):
-    # Pattern: model_epoch_{epoch}.pth
-    files = glob.glob(os.path.join(checkpoints_dir, "model_epoch_*.pth"))
+    # Pattern: model_epoch_{epoch}.pth OR resnet18_triplet_epoch_{epoch}.pth
+    files = glob.glob(os.path.join(checkpoints_dir, "*_epoch_*.pth"))
     if not files:
         return None, None
     
     # Extract epochs
     epoch_files = []
     for f in files:
-        match = re.search(r"model_epoch_(\d+)\.pth", f)
+        match = re.search(r"_epoch_(\d+)\.pth", f)
         if match:
             epoch_files.append((int(match.group(1)), f))
     
@@ -66,71 +67,6 @@ def fen_from_board(board_grid):
             fen_row += str(empty_count)
         fen_rows.append(fen_row)
     return "/".join(fen_rows)
-
-def create_visual_board(board_grid, ood_mask):
-    # Setup colors
-    colors = ["#F0D9B5", "#B58863"] # Light, Dark (Standard Chess)
-    
-    width, height = 480, 480
-    img = Image.new("RGB", (width, height))
-    draw = ImageDraw.Draw(img)
-    
-    # Try to load a font
-    font = None
-    try:
-        # Common paths for Linux/Mac
-        font_paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
-            "/usr/share/fonts/freefont/FreeSansBold.ttf",
-            "/System/Library/Fonts/HelveticaNeue.ttc",
-            "/Library/Fonts/Arial.ttf"
-        ]
-        for path in font_paths:
-            if os.path.exists(path):
-                font = ImageFont.truetype(path, 40)
-                break
-        if font is None:
-             font = ImageFont.load_default()
-    except Exception:
-        font = ImageFont.load_default()
-
-    tile_size = 60
-    
-    for r in range(8):
-        for c in range(8):
-            x = c * tile_size
-            y = r * tile_size
-            
-            # Draw background square
-            color_idx = (r + c) % 2
-            draw.rectangle([x, y, x+tile_size, y+tile_size], fill=colors[color_idx])
-            
-            # Draw Piece
-            piece_char = board_grid[r][c]
-            if piece_char != 'e':
-                # Determine color
-                if piece_char.isupper(): # White piece
-                    text_color = "white"
-                    outline_color = "black"
-                else: # Black piece
-                    text_color = "black"
-                    outline_color = "white"
-                
-                # Draw text with outline for visibility
-                # Note: stroke_width available in Pillow >= 6.2.0
-                try:
-                    draw.text((x+15, y+10), piece_char, font=font, fill=text_color, stroke_width=2, stroke_fill=outline_color)
-                except TypeError:
-                    # Fallback for older Pillow
-                    draw.text((x+15, y+10), piece_char, font=font, fill=text_color)
-            
-            # Draw OOD X
-            if (r, c) in ood_mask:
-                 draw.line([x, y, x+tile_size, y+tile_size], fill="red", width=4)
-                 draw.line([x, y+tile_size, x+tile_size, y], fill="red", width=4)
-
-    return img
 
 def infer_tile(model, tile_tensor, device, model_type, centroids=None, ood_threshold=1.0):
     tile_tensor = tile_tensor.to(device).unsqueeze(0) # (1, 3, H, W)
@@ -171,14 +107,14 @@ def infer_tile(model, tile_tensor, device, model_type, centroids=None, ood_thres
             return ID_TO_PIECE.get(pred_label, 'e'), is_ood
 
 def main():
-    parser = argparse.ArgumentParser(description="Chess Board Inference")
-    parser.add_argument("--image", type=str, required=True, help="Path to input image")
-    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints", help="Directory containing models")
-    parser.add_argument("--ood_threshold", type=float, default=0.8, help="Threshold for OOD detection (distance or confidence)")
-    args = parser.parse_args()
-    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    parser = argparse.ArgumentParser(description="Chess Board Inference")
+    parser.add_argument("--image", type=str, required=True, help="Path to input image")
+    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints_resnet_triplet", help="Directory containing models")
+    parser.add_argument("--ood_threshold", type=float, default=0.8, help="Threshold for OOD detection (distance or confidence)")
+    args = parser.parse_args()
     
     # 1. Find Model
     if not os.path.exists(args.checkpoints_dir):
@@ -266,13 +202,75 @@ def main():
     fen = fen_from_board(board_grid)
     print(f"\nPredicted FEN: {fen}")
     
-    # 5. Create Visual FEN Diagram
-    fen_img = create_visual_board(board_grid, ood_mask)
-    output_filename = "inference_result.jpg"
-    fen_img.save(output_filename)
-    print(f"Saved visual FEN diagram to {output_filename}")
+    # 5. Generate Offline FEN Image using chessboard-image
+    output_filename = "inference_result.png"
     
-    # Optional: Also save the overlay on original image
+    # Generate the base board image from FEN
+    # cbi.generate_image returns True on success, saves to path
+    print(f"Generating FEN diagram using chessboard-image...")
+    cbi.generate_image(
+        fen_file=fen,
+        output_path=output_filename,
+        size=480,
+        show_coordinates=True
+    )
+    
+    # 6. Overlay OOD markers
+    # Open the generated image to draw on it
+    if os.path.exists(output_filename):
+        fen_img = Image.open(output_filename).convert("RGB")
+        draw = ImageDraw.Draw(fen_img)
+        w, h = fen_img.size
+        
+        # Calculate board area (might be different due to coordinates)
+        # chessboard-image usually adds border for coordinates.
+        # Let's assume standard square board behavior for now or check size.
+        # If coordinates are shown, the actual board is smaller.
+        # But we asked for size=480. Let's see if we can overlay accurately.
+        # A safer bet for exact overlay is to use the package's internal drawing or just standard calculation
+        # assuming the image is mostly the board.
+        
+        # With coordinates, there is a margin.
+        # chessboard-image centers the board.
+        # Let's do a simple full-image grid if coordinates are disabled or try to detect.
+        # For robustness, let's disable coordinates for the OOD overlay version to ensure grid alignment
+        # Or re-generate without coordinates for the overlay logic.
+        
+        cbi.generate_image(
+            fen_file=fen,
+            output_path=output_filename,
+            size=480,
+            show_coordinates=False
+        )
+        fen_img = Image.open(output_filename).convert("RGB")
+        draw = ImageDraw.Draw(fen_img)
+        w, h = fen_img.size
+        
+        cell_w = w / 8
+        cell_h = h / 8
+    
+        for r, c in ood_mask:
+            x_min = c * cell_w
+            y_min = r * cell_h
+            x_max = (c + 1) * cell_w
+            y_max = (r + 1) * cell_h
+            
+            margin_x = cell_w * 0.2
+            margin_y = cell_h * 0.2
+            
+            draw.line(
+                [(x_min + margin_x, y_min + margin_y), (x_max - margin_x, y_max - margin_y)], 
+                fill="red", width=5
+            )
+            draw.line(
+                [(x_min + margin_x, y_max - margin_y), (x_max - margin_x, y_min + margin_y)], 
+                fill="red", width=5
+            )
+            
+        fen_img.save(output_filename)
+        print(f"Saved generated FEN diagram to {output_filename}")
+    
+    # Save overlay as well
     overlay_filename = "inference_overlay.jpg"
     draw = ImageDraw.Draw(original_img)
     w, h = original_img.size
@@ -284,11 +282,19 @@ def main():
         y_min = r * cell_h
         x_max = (c + 1) * cell_w
         y_max = (r + 1) * cell_h
+        
         margin_x = cell_w * 0.2
         margin_y = cell_h * 0.2
-        draw.line([(x_min + margin_x, y_min + margin_y), (x_max - margin_x, y_max - margin_y)], fill="red", width=5)
-        draw.line([(x_min + margin_x, y_max - margin_y), (x_max - margin_x, y_min + margin_y)], fill="red", width=5)
-    
+        
+        draw.line(
+            [(x_min + margin_x, y_min + margin_y), (x_max - margin_x, y_max - margin_y)], 
+            fill="red", width=5
+        )
+        draw.line(
+            [(x_min + margin_x, y_max - margin_y), (x_max - margin_x, y_min + margin_y)], 
+            fill="red", width=5
+        )
+        
     original_img.save(overlay_filename)
     print(f"Saved original overlay to {overlay_filename}")
 
