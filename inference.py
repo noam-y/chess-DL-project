@@ -5,7 +5,7 @@ import re
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from torchvision import transforms
 
@@ -27,7 +27,6 @@ except ImportError:
     ID_TO_PIECE = {v: k for k, v in PIECE_TO_ID.items()}
 
 # --- Utils ---
-
 
 def get_latest_epoch_model(checkpoints_dir):
     # Pattern: model_epoch_{epoch}.pth
@@ -67,6 +66,71 @@ def fen_from_board(board_grid):
             fen_row += str(empty_count)
         fen_rows.append(fen_row)
     return "/".join(fen_rows)
+
+def create_visual_board(board_grid, ood_mask):
+    # Setup colors
+    colors = ["#F0D9B5", "#B58863"] # Light, Dark (Standard Chess)
+    
+    width, height = 480, 480
+    img = Image.new("RGB", (width, height))
+    draw = ImageDraw.Draw(img)
+    
+    # Try to load a font
+    font = None
+    try:
+        # Common paths for Linux/Mac
+        font_paths = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/freefont/FreeSansBold.ttf",
+            "/System/Library/Fonts/HelveticaNeue.ttc",
+            "/Library/Fonts/Arial.ttf"
+        ]
+        for path in font_paths:
+            if os.path.exists(path):
+                font = ImageFont.truetype(path, 40)
+                break
+        if font is None:
+             font = ImageFont.load_default()
+    except Exception:
+        font = ImageFont.load_default()
+
+    tile_size = 60
+    
+    for r in range(8):
+        for c in range(8):
+            x = c * tile_size
+            y = r * tile_size
+            
+            # Draw background square
+            color_idx = (r + c) % 2
+            draw.rectangle([x, y, x+tile_size, y+tile_size], fill=colors[color_idx])
+            
+            # Draw Piece
+            piece_char = board_grid[r][c]
+            if piece_char != 'e':
+                # Determine color
+                if piece_char.isupper(): # White piece
+                    text_color = "white"
+                    outline_color = "black"
+                else: # Black piece
+                    text_color = "black"
+                    outline_color = "white"
+                
+                # Draw text with outline for visibility
+                # Note: stroke_width available in Pillow >= 6.2.0
+                try:
+                    draw.text((x+15, y+10), piece_char, font=font, fill=text_color, stroke_width=2, stroke_fill=outline_color)
+                except TypeError:
+                    # Fallback for older Pillow
+                    draw.text((x+15, y+10), piece_char, font=font, fill=text_color)
+            
+            # Draw OOD X
+            if (r, c) in ood_mask:
+                 draw.line([x, y, x+tile_size, y+tile_size], fill="red", width=4)
+                 draw.line([x, y+tile_size, x+tile_size, y], fill="red", width=4)
+
+    return img
 
 def infer_tile(model, tile_tensor, device, model_type, centroids=None, ood_threshold=1.0):
     tile_tensor = tile_tensor.to(device).unsqueeze(0) # (1, 3, H, W)
@@ -163,7 +227,6 @@ def main():
     original_img = img.copy()
     
     # Resize to 480x480 for cutting (standard from training)
-    # The training code resizes to 480x480 to get 60x60 tiles.
     img_resized = img.resize((480, 480), resample=Image.BILINEAR)
     
     # Transforms
@@ -196,9 +259,6 @@ def main():
             
             if is_ood:
                 ood_mask.append((r, c))
-                # If OOD, we still keep the predicted piece in FEN or mark as '?' or keep predicted?
-                # The user asked for Red X in the image. FEN is usually strictly piece chars.
-                # We'll keep the best guess piece in FEN.
                 
         board_grid.append(row_pieces)
         
@@ -206,37 +266,31 @@ def main():
     fen = fen_from_board(board_grid)
     print(f"\nPredicted FEN: {fen}")
     
-    # 5. Draw Red X on OOD tiles
+    # 5. Create Visual FEN Diagram
+    fen_img = create_visual_board(board_grid, ood_mask)
+    output_filename = "inference_result.jpg"
+    fen_img.save(output_filename)
+    print(f"Saved visual FEN diagram to {output_filename}")
+    
+    # Optional: Also save the overlay on original image
+    overlay_filename = "inference_overlay.jpg"
     draw = ImageDraw.Draw(original_img)
     w, h = original_img.size
     cell_w = w / 8
     cell_h = h / 8
     
     for r, c in ood_mask:
-        # Calculate coordinates
         x_min = c * cell_w
         y_min = r * cell_h
         x_max = (c + 1) * cell_w
         y_max = (r + 1) * cell_h
-        
-        # Draw thick red cross
         margin_x = cell_w * 0.2
         margin_y = cell_h * 0.2
-        
-        # Line 1: Top-Left to Bottom-Right
-        draw.line(
-            [(x_min + margin_x, y_min + margin_y), (x_max - margin_x, y_max - margin_y)], 
-            fill="red", width=5
-        )
-        # Line 2: Bottom-Left to Top-Right
-        draw.line(
-            [(x_min + margin_x, y_max - margin_y), (x_max - margin_x, y_min + margin_y)], 
-            fill="red", width=5
-        )
-        
-    output_filename = "inference_result.jpg"
-    original_img.save(output_filename)
-    print(f"Saved result with OOD markers to {output_filename}")
+        draw.line([(x_min + margin_x, y_min + margin_y), (x_max - margin_x, y_max - margin_y)], fill="red", width=5)
+        draw.line([(x_min + margin_x, y_max - margin_y), (x_max - margin_x, y_min + margin_y)], fill="red", width=5)
+    
+    original_img.save(overlay_filename)
+    print(f"Saved original overlay to {overlay_filename}")
 
 if __name__ == "__main__":
     main()
