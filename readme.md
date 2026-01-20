@@ -76,7 +76,7 @@ Before running evaluation, ensure you have:
 Run the script from the command line, providing the path to your model checkpoint:
 
 ```bash
-python evaluate.py --model_path checkpoints/model_epoch_5.pth
+python evaluate.py --model_path checkpoints/model_epoch_10.pth --test_dir aug/new_augmented_data
 ```
 
 ## upload to git-
