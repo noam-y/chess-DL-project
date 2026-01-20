@@ -25,11 +25,10 @@ PIECE_TO_ID = {
 ID_TO_PIECE = {v: k for k, v in PIECE_TO_ID.items()}
 ID_TO_PIECE[0] = '1'
 
-# --- 1. Model Definition (Must match train.py exactly) ---
+# --- 1. Model Definition (Must match train_v2.py exactly) ---
 class SmartChessNet(nn.Module):
     def __init__(self, num_classes=13):
         super(SmartChessNet, self).__init__()
-        # We don't need pre-trained weights here, we will load our own checkpoint
         try:
             self.base_model = models.resnet18(weights=None) 
         except:
@@ -90,11 +89,147 @@ def compare_fens(true_fen, pred_fen):
 class SmartEvalDataset(Dataset):
     def __init__(self, csv_file, root_dir):
         self.df = pd.read_csv(csv_file)
-        # Handle paths safely
         self.root_dir = os.path.abspath(root_dir)
         
-        # Target size for ResNet
-        self.target_size = 224
+        # *** MUST MATCH TRAIN_V2 ***
+        # If you changed target_size in train_v2.py, change it here too!
+        self.target_size = 96 
         
-        # 1. Resize the cropped patch to 224x224
         self.resize_transform = transforms.Resize((self.target_size, self.target_size))
+        
+        self.transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+    def crop_square(self, image, row, col):
+        """ Contextual Cropping Logic """
+        width, height = image.size
+        square_w = width / 8
+        square_h = height / 8
+        
+        center_x = col * square_w + square_w / 2
+        center_y = row * square_h + square_h / 2
+        
+        crop_size = square_w * 1.5 
+        
+        x1 = max(0, center_x - crop_size / 2)
+        y1 = max(0, center_y - crop_size / 2)
+        x2 = min(width, center_x + crop_size / 2)
+        y2 = min(height, center_y + crop_size / 2)
+        
+        return image.crop((x1, y1, x2, y2))
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        img_name = row['filename']
+        img_path = os.path.join(self.root_dir, img_name)
+        
+        if not os.path.exists(img_path):
+            # Fallback if filename is just the name but full path needed
+            pass
+
+        image = Image.open(img_path).convert('RGB')
+        
+        patches = []
+        for r in range(8):
+            for c in range(8):
+                patch = self.crop_square(image, r, c)
+                patch = self.resize_transform(patch)
+                patch = self.transform(patch)
+                patches.append(patch)
+        
+        return torch.stack(patches), row['fen'], row['filename']
+
+# --- 4. Main Evaluation Loop ---
+def main(args):
+    # Setup paths
+    csv_path = os.path.join(args.test_dir, args.csv_name)
+    if not os.path.exists(csv_path):
+        print(f"Error: CSV file not found at {csv_path}")
+        return
+    
+    if not os.path.exists(args.model_path):
+        print(f"Error: Model weights not found at {args.model_path}")
+        return
+
+    print(f"Model: {args.model_path}")
+    print(f"Data:  {args.test_dir}")
+    print(f"Device: {DEVICE}")
+
+    # Load Dataset
+    dataset = SmartEvalDataset(csv_path, args.test_dir)
+    loader = DataLoader(dataset, batch_size=4, shuffle=False)
+    
+    # Load Model
+    model = SmartChessNet(num_classes=13).to(DEVICE)
+    
+    try:
+        state_dict = torch.load(args.model_path, map_location=DEVICE)
+        model.load_state_dict(state_dict)
+        print("Weights loaded successfully.")
+    except Exception as e:
+        print(f"Error loading weights: {e}")
+        return
+
+    model.eval()
+
+    total_squares = 0
+    correct_squares = 0
+    total_boards = 0
+    perfect_boards = 0
+    results = [] 
+
+    print("Running Inference...")
+    with torch.no_grad():
+        for images, true_fens, filenames in tqdm(loader):
+            Batch_Size = images.shape[0]
+            inputs = images.view(-1, 3, 96, 96).to(DEVICE) # Ensure size matches target_size
+            
+            outputs = model(inputs)
+            preds_flat = torch.argmax(outputs, dim=1) 
+            preds_grid = preds_flat.view(Batch_Size, 8, 8)
+            
+            for i in range(Batch_Size):
+                pred_fen_str = prediction_to_fen(preds_grid[i])
+                true_fen_str = true_fens[i]
+                
+                correct, is_perfect = compare_fens(true_fen_str, pred_fen_str)
+                
+                total_squares += 64
+                correct_squares += correct
+                total_boards += 1
+                if is_perfect:
+                    perfect_boards += 1
+                
+                results.append({
+                    'filename': filenames[i],
+                    'true_fen': true_fen_str,
+                    'pred_fen': pred_fen_str,
+                    'accuracy': correct / 64.0,
+                    'is_perfect': is_perfect
+                })
+
+    piece_acc = 100 * correct_squares / total_squares if total_squares > 0 else 0
+    board_acc = 100 * perfect_boards / total_boards if total_boards > 0 else 0
+    
+    print("-" * 30)
+    print(f"Piece Accuracy: {piece_acc:.2f}%")
+    print(f"Board Accuracy: {board_acc:.2f}%")
+    print("-" * 30)
+
+    output_csv = "evaluation_results.csv"
+    pd.DataFrame(results).to_csv(output_csv, index=False)
+    print(f"Results saved to {output_csv}")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_path", type=str, required=True)
+    parser.add_argument("--test_dir", type=str, default="aug/new_augmented_data")
+    parser.add_argument("--csv_name", type=str, default="augmented_ground_truth.csv")
+
+    args = parser.parse_args()
+    main(args)

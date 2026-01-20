@@ -60,7 +60,6 @@ class SmartChessDataset(Dataset):
         
         dataframes = []
         for csv_path in csv_files:
-            # 2. Smart Split: Train vs. Test (Game 6)
             is_game6 = 'game6' in csv_path
             
             # Logic for Training vs Validation sets
@@ -90,10 +89,8 @@ class SmartChessDataset(Dataset):
         else:
             self.full_df = pd.DataFrame()
 
-        # Target size: ResNet works best with 224x224
-        self.target_size = 224
+        self.target_size = 96
         
-        # Transform to resize the small patch to 224
         self.resize_transform = transforms.Resize((self.target_size, self.target_size))
 
         if mode == 'train':
@@ -162,20 +159,15 @@ class SmartChessDataset(Dataset):
             # Loop over all 64 squares
             for r in range(8):
                 for c in range(8):
-                    # 1. Smart cropping with context
                     patch = self.crop_square(image, r, c)
-                    
-                    # 2. Resize to 224x224 for ResNet
                     patch = self.resize_transform(patch)
                     
-                    # 3. Augmentations and Normalization
                     if self.transform:
                         patch = self.transform(patch)
                     
                     patches.append(patch)
                     labels.append(label_board[r, c])
             
-            # Stack into a single tensor: (64, 3, 224, 224)
             return torch.stack(patches), torch.stack(labels)
 
         except:
@@ -207,22 +199,16 @@ def main(args):
 
     # Create Datasets
     train_ds = SmartChessDataset(args.data_dir, mode='train')
-    # If desired, create val_ds to check performance during run:
-    # val_ds = SmartChessDataset(args.data_dir, mode='val')
 
     if len(train_ds) == 0:
         print("Error: No training data found.")
         return
 
-    # Reduced default batch_size because images are now huge (224x224)
-    # If you have a strong GPU, you can increase this.
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, 
-                              collate_fn=collate_fn_skip_none, num_workers=2)
+                              collate_fn=collate_fn_skip_none, num_workers=4)
 
     model = SmartChessNet().to(device)
 
-    # Handle Class Imbalance
-    # Give less weight to empty squares (0) so the model tries harder to identify pieces
     class_weights = torch.ones(13).to(device)
     class_weights[0] = 0.2 
     criterion = nn.CrossEntropyLoss(weight=class_weights)
@@ -287,6 +273,6 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=10)
     # Default is 2 because images are larger and might fill memory
-    parser.add_argument("--batch_size", type=int, default=2) 
+    parser.add_argument("--batch_size", type=int, default=16) 
     args = parser.parse_args()
     main(args)
