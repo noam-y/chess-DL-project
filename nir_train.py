@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision import transforms, models
 from torchvision.models import ResNet18_Weights
 from PIL import Image
@@ -59,7 +59,6 @@ class ResNetWithEmbeddings(nn.Module):
     def __init__(self, num_classes=13):
         super(ResNetWithEmbeddings, self).__init__()
         # Load pretrained ResNet18
-        # Use weights instead of pretrained=True to avoid deprecation warnings
         base_model = models.resnet18(weights=ResNet18_Weights.DEFAULT)
         
         # Remove the final FC layer to get the feature extractor
@@ -129,7 +128,7 @@ def batch_hard_triplet_loss(embeddings, labels, margin=1.0, device='cpu'):
 
 # --- 5. Centroid Computation & OOD Logic ---
 def compute_centroids(model, dataloader, device, num_classes=13):
-    print("Computing class centroids...")
+    print("Computing class centroids (from Train Set)...")
     model.eval()
     
     centroids = torch.zeros(num_classes, 512).to(device)
@@ -157,24 +156,37 @@ def compute_centroids(model, dataloader, device, num_classes=13):
             
     return centroids
 
-def predict_with_ood(model, centroids, image, ood_threshold=1.0, device='cpu'):
-    """
-    Predicts class or returns 'OOD' if distance to nearest centroid > ood_threshold.
-    """
+def evaluate_model(model, dataloader, device, set_name="Validation"):
+    print(f"\nRunning Evaluation on {set_name} Set...")
     model.eval()
+    all_preds = []
+    all_targets = []
+    
     with torch.no_grad():
-        _, embedding = model(image.unsqueeze(0).to(device))
-        embedding = F.normalize(embedding, p=2, dim=1)
-        
-        # Calculate distances to all centroids
-        dists = torch.cdist(embedding, centroids.unsqueeze(0), p=2).squeeze(0) # (num_classes,)
-        
-        min_dist, pred_idx = torch.min(dists, dim=0)
-        
-        if min_dist.item() > ood_threshold:
-            return "OOD", min_dist.item()
-        else:
-            return ID_TO_PIECE[pred_idx.item()], min_dist.item()
+        for images, labels in tqdm(dataloader, desc=f"Evaluating {set_name}"):
+            images = images.to(device)
+            labels = labels.to(device)
+            
+            logits, _ = model(images)
+            _, predicted = torch.max(logits.data, 1)
+            
+            all_preds.extend(predicted.cpu().numpy())
+            all_targets.extend(labels.cpu().numpy())
+
+    print(f"\n{set_name} Set Detailed Report:")
+    
+    # Use unique labels present in the targets to avoid index errors if some classes are missing
+    unique_labels = sorted(list(set(all_targets)))
+    target_names_present = [ID_TO_PIECE[i] for i in unique_labels]
+    
+    print(classification_report(all_targets, all_preds, zero_division=0, target_names=target_names_present, labels=unique_labels))
+    
+    print(f"{set_name} Confusion Matrix:")
+    print(confusion_matrix(all_targets, all_preds, labels=unique_labels))
+    
+    # Return overall accuracy for simple tracking
+    correct = sum(p == t for p, t in zip(all_preds, all_targets))
+    return 100.0 * correct / len(all_targets)
 
 # --- 6. Main Training Function ---
 def main(args):
@@ -196,20 +208,38 @@ def main(args):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    # Dataset
-    dataset = ChessTilesDataset(root_dir=args.data_dir, transform=train_transform)
-    if len(dataset) == 0:
+    # Dataset Loading & Splitting
+    full_dataset = ChessTilesDataset(root_dir=args.data_dir, transform=train_transform)
+    if len(full_dataset) == 0:
         print("Dataset is empty. Exiting.")
         return
 
-    # DataLoader (increased batch size for better triplet mining chances)
-    batch_size = max(args.batch_size, 8) # Ensure at least 8 for decent mining
+    # 80-20 Split
+    train_size = int(0.8 * len(full_dataset))
+    val_size = len(full_dataset) - train_size
+    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+    
+    print(f"Data Split: {train_size} Training samples, {val_size} Validation samples.")
+
+    # DataLoaders
+    # Note: drop_last=True for train to help triplet mining. 
+    # For validation, we want to evaluate everything, so drop_last=False.
+    batch_size = max(args.batch_size, 8) 
+    
     train_loader = DataLoader(
-        dataset, 
+        train_dataset, 
         batch_size=batch_size, 
         shuffle=True, 
         num_workers=4,
-        drop_last=True # Important to avoid very small last batches where mining fails
+        drop_last=True 
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        drop_last=False
     )
 
     # Model
@@ -217,13 +247,11 @@ def main(args):
     model = ResNetWithEmbeddings(num_classes=13).to(device)
 
     # Losses
-    # 1. Cross Entropy (Class weights for imbalance)
     class_weights = torch.ones(13)
     class_weights[0] = 0.1 
     class_weights = class_weights.to(device)
     ce_criterion = nn.CrossEntropyLoss(weight=class_weights)
     
-    # 2. Triplet Loss (Function defined above)
     triplet_margin = 1.0
     
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
@@ -252,7 +280,6 @@ def main(args):
             tri_loss = batch_hard_triplet_loss(embeddings, labels, margin=triplet_margin, device=device)
             
             # Combined Loss
-            # You can tune the weight (alpha). Here we use 1:1.
             total_loss = ce_loss + tri_loss
             
             total_loss.backward()
@@ -276,58 +303,33 @@ def main(args):
         epoch_ce = running_ce_loss / len(train_loader)
         epoch_tri = running_triplet_loss / len(train_loader)
         epoch_acc = 100. * correct / total
-        print(f"Epoch {epoch+1} Summary: CE_Loss={epoch_ce:.4f}, Triplet_Loss={epoch_tri:.4f}, Acc={epoch_acc:.2f}%")
+        print(f"Epoch {epoch+1} Training Summary: CE_Loss={epoch_ce:.4f}, Triplet_Loss={epoch_tri:.4f}, Train_Acc={epoch_acc:.2f}%")
+        
+        # --- Validation Step ---
+        val_acc = evaluate_model(model, val_loader, device, set_name="Validation")
+        print(f"Epoch {epoch+1} Validation Accuracy: {val_acc:.2f}%")
         
         # Save model
         save_path = os.path.join(args.output_dir, f"resnet18_triplet_epoch_{epoch+1}.pth")
         torch.save(model.state_dict(), save_path)
         print(f"Model saved to {save_path}")
 
-    # Compute and Save Centroids
+    # Compute and Save Centroids (Using Training Set)
     centroids = compute_centroids(model, train_loader, device)
     torch.save(centroids, os.path.join(args.output_dir, "centroids.pt"))
     print(f"Centroids saved to {os.path.join(args.output_dir, 'centroids.pt')}")
 
-    # Final Evaluation (Classification)
-    print("\nRunning Final Evaluation...")
-    model.eval()
-    all_preds = []
-    all_targets = []
-    
-    with torch.no_grad():
-        for images, labels in tqdm(train_loader, desc="Evaluating"):
-            images = images.to(device)
-            labels = labels.to(device)
-            
-            logits, _ = model(images)
-            _, predicted = torch.max(logits.data, 1)
-            
-            all_preds.extend(predicted.cpu().numpy())
-            all_targets.extend(labels.cpu().numpy())
-
-    print("\nDetailed Report:")
-    target_names = [ID_TO_PIECE[i] for i in range(13)]
-    # Use unique labels present in the targets to avoid index errors if some classes are missing
-    unique_labels = sorted(list(set(all_targets)))
-    target_names_present = [ID_TO_PIECE[i] for i in unique_labels]
-    
-    print(classification_report(all_targets, all_preds, zero_division=0, target_names=target_names_present, labels=unique_labels))
-    
-    print("Confusion Matrix:")
-    print(confusion_matrix(all_targets, all_preds, labels=unique_labels))
-
-    # OOD Demonstration (on training set, just to show stats)
-    print(f"\nOOD Statistics (Threshold: {args.ood_threshold}):")
+    # OOD Demonstration (on Validation set to be fair)
+    print(f"\nOOD Statistics on Validation Set (Threshold: {args.ood_threshold}):")
     distances = []
     ood_count = 0
     with torch.no_grad():
-         for images, labels in tqdm(train_loader, desc="Checking OOD stats"):
+         for images, labels in tqdm(val_loader, desc="Checking OOD stats"):
             images = images.to(device)
             _, embeddings = model(images)
             embeddings = F.normalize(embeddings, p=2, dim=1)
             
             # Batch distance calculation
-            # dists: (batch, num_classes)
             dists = torch.cdist(embeddings, centroids.unsqueeze(0), p=2).squeeze(0)
             min_dists, _ = torch.min(dists, dim=1)
             
@@ -338,7 +340,7 @@ def main(args):
     max_dist = np.max(distances)
     print(f"Average Distance to Nearest Centroid: {avg_dist:.4f}")
     print(f"Max Distance to Nearest Centroid: {max_dist:.4f}")
-    print(f"Flagged as OOD (Threshold > {args.ood_threshold}): {ood_count} / {len(dataset)} ({100.0 * ood_count / len(dataset):.2f}%)")
+    print(f"Flagged as OOD (Threshold > {args.ood_threshold}): {ood_count} / {len(val_dataset)} ({100.0 * ood_count / len(val_dataset):.2f}%)")
 
 
 if __name__ == "__main__":
