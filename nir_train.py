@@ -202,14 +202,28 @@ def main(args):
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Transforms
+    # Add augmentation for training
     train_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomVerticalFlip(p=0.5),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    
+    # Validation transform should not have augmentation
+    val_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
     # Dataset Loading & Splitting
-    full_dataset = ChessTilesDataset(root_dir=args.data_dir, transform=train_transform)
+    # We load the full dataset first without transforms to split indices
+    # But to apply different transforms, we need a helper or two dataset instances.
+    # A simpler way given the current setup is to use the subset wrapper logic.
+    
+    full_dataset = ChessTilesDataset(root_dir=args.data_dir, transform=None) # Load without transform initially
     if len(full_dataset) == 0:
         print("Dataset is empty. Exiting.")
         return
@@ -217,7 +231,28 @@ def main(args):
     # 80-20 Split
     train_size = int(0.8 * len(full_dataset))
     val_size = len(full_dataset) - train_size
-    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+    train_subset, val_subset = random_split(full_dataset, [train_size, val_size])
+    
+    # Assign transforms to the underlying subsets (hacky but works for standard subsets)
+    # Better approach: Wrap subsets in a custom Dataset class that applies the transform
+    class SubsetWithTransform(Dataset):
+        def __init__(self, subset, transform=None):
+            self.subset = subset
+            self.transform = transform
+            
+        def __len__(self):
+            return len(self.subset)
+            
+        def __getitem__(self, idx):
+            # The underlying dataset (full_dataset) returns (image, label) where image is PIL
+            # because we initialized it with transform=None
+            image, label = self.subset[idx]
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+
+    train_dataset = SubsetWithTransform(train_subset, transform=train_transform)
+    val_dataset = SubsetWithTransform(val_subset, transform=val_transform)
     
     print(f"Data Split: {train_size} Training samples, {val_size} Validation samples.")
 
@@ -255,6 +290,8 @@ def main(args):
     triplet_margin = 1.0
     
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
+
+    best_val_acc = 0.0
 
     # Training Loop
     for epoch in range(args.epochs):
@@ -309,12 +346,22 @@ def main(args):
         val_acc = evaluate_model(model, val_loader, device, set_name="Validation")
         print(f"Epoch {epoch+1} Validation Accuracy: {val_acc:.2f}%")
         
-        # Save model
-        save_path = os.path.join(args.output_dir, f"resnet18_triplet_epoch_{epoch+1}.pth")
-        torch.save(model.state_dict(), save_path)
-        print(f"Model saved to {save_path}")
+        # Save Best Model
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            save_path = os.path.join(args.output_dir, "resnet18_best.pth")
+            torch.save(model.state_dict(), save_path)
+            print(f"New best model saved to {save_path} (Acc: {best_val_acc:.2f}%)")
+        else:
+            print(f"Validation accuracy did not improve (Best: {best_val_acc:.2f}%)")
 
     # Compute and Save Centroids (Using Training Set)
+    # Load best model for centroid computation
+    best_model_path = os.path.join(args.output_dir, "resnet18_best.pth")
+    if os.path.exists(best_model_path):
+        print("Loading best model for centroid computation...")
+        model.load_state_dict(torch.load(best_model_path))
+    
     centroids = compute_centroids(model, train_loader, device)
     torch.save(centroids, os.path.join(args.output_dir, "centroids.pt"))
     print(f"Centroids saved to {os.path.join(args.output_dir, 'centroids.pt')}")
@@ -357,7 +404,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
-    parser.add_argument("--ood_threshold", type=float, default=0.9, help="Distance threshold for OOD detection")
+    parser.add_argument("--ood_threshold", type=float, default=0.6, help="Distance threshold for OOD detection")
     parser.add_argument("--device", type=str, default="auto", help="Device to use: 'auto', 'cuda', 'cpu'")
 
     args = parser.parse_args()
