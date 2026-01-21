@@ -82,7 +82,7 @@ class SmartChessDataset(Dataset):
         else:
             self.full_df = pd.DataFrame()
 
-        self.target_size = 96
+        self.target_size = 224
         self.resize_transform = transforms.Resize((self.target_size, self.target_size))
 
         if mode == 'train':
@@ -209,7 +209,7 @@ def main(args):
             if batch is None: continue
             boards, labels = batch
             
-            inputs = boards.view(-1, 3, 96, 96).to(device)
+            inputs = boards.view(-1, 3, 224, 224).to(device)
             targets = labels.view(-1).to(device)
 
             optimizer.zero_grad()
