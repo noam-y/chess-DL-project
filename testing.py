@@ -102,7 +102,7 @@ def main():
     parser = argparse.ArgumentParser(description="Batch Inference on Unlabeled Images")
     parser.add_argument("--input_dir", type=str, default="unlalbled", help="Directory with input images")
     parser.add_argument("--output_dir", type=str, default="results", help="Directory to save results")
-    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints", help="Directory containing models")
+    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints_resnet_triplet", help="Directory containing models")
     parser.add_argument("--ood_threshold", type=float, default=0.8, help="Threshold for OOD detection")
     args = parser.parse_args()
 
