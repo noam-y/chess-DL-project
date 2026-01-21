@@ -54,7 +54,7 @@ class SmartChessDataset(Dataset):
         dataframes = []
         
         for csv_path in csv_files:
-            is_test_game = 'game6' in csv_path or 'game4' in csv_path or 'game2' in csv_path
+            is_test_game = 'game6' in csv_path
             
             # Split logic
             if mode == 'train' and is_test_game:
