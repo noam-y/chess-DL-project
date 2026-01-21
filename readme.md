@@ -5,10 +5,9 @@ This guide documents the setup, data management, and training workflow for the C
 ## 📋 Prerequisites
 
 Before starting, ensure you have the following on your local machine:
-1.  **VSCode** (Visual Studio Code).
-2.  **Git** (Recommended: Install with Git Bash for Windows).
-3.  **MobaXterm** or **WinSCP** (For file transfer via SFTP).
-4.  **BGU VPN**: Required if connecting from outside the university network.
+1.  **VSCode**
+2.  **Git** 
+3.  **BGU VPN**
 
 ---
 
@@ -32,6 +31,10 @@ source activate chess_env
 
 # 4. Install dependencies
 pip install torch torchvision pandas numpy Pillow tqdm
+
+# 5. ask for the gpu
+sinteractive --qos course --part gtx1080 --gpu 1 --time 0-08:00:00
+# make sure you connect via ssh to the gpu you requested.
 ```
 
 
