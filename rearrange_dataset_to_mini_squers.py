@@ -74,14 +74,14 @@ def main():
                 # Load and process image
                 with Image.open(img_path) as img:
                     img = img.convert('RGB')
-                    # Resize to 480x480 as done in train.py (to get 60x60 squares)
-                    img = img.resize((480, 480), resample=Image.BILINEAR)
+                    # Resize to 640x640 to get 80x80 squares (8 * 80 = 640)
+                    img = img.resize((640, 640), resample=Image.BILINEAR)
                     
                     # Parse FEN into 8x8 grid
                     grid = parse_fen_to_grid(fen)
                     
                     # Crop into 64 tiles
-                    tile_size = 60
+                    tile_size = 80
                     for r in range(8):
                         for c in range(8):
                             left = c * tile_size
