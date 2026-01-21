@@ -115,7 +115,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Chess Board Inference")
     parser.add_argument("--image", type=str, required=True, help="Path to input image")
-    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints_resnet_triplet", help="Directory containing models")
+    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints_resnet_multihead", help="Directory containing models")
     parser.add_argument("--model", type=str, default=None, help="Specific model filename to load (optional)")
     parser.add_argument("--ood_threshold", type=float, default=0.8, help="Threshold for OOD detection (distance or confidence)")
     args = parser.parse_args()
@@ -140,8 +140,17 @@ def main():
                 model_path = best_path
                 print(f"Loading best model from {model_path}")
             else:
-                print(f"No model_epoch_*.pth or resnet18_best.pth files found in {args.checkpoints_dir}")
-                return
+                # Try finding any 'resnet18_best_*.pth'
+                best_files = glob.glob(os.path.join(args.checkpoints_dir, "resnet18_best_*.pth"))
+                if best_files:
+                    # Sort by accuracy (extracted from filename) or just take last
+                    # Filename format: resnet18_best_bs32_epoch5_acc98.50.pth
+                    best_files.sort(key=os.path.getmtime, reverse=True) # Latest modified
+                    model_path = best_files[0]
+                    print(f"Loading best model (by time) from {model_path}")
+                else:
+                    print(f"No model_epoch_*.pth or resnet18_best.pth files found in {args.checkpoints_dir}")
+                    return
         else:
             print(f"Loading latest epoch model from {model_path} (Epoch {epoch})")
     
