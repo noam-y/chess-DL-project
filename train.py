@@ -50,6 +50,8 @@ class ChessPatchesDataset(Dataset):
 
         dataframes = []
         for csv_path in csv_files:
+            if 'game6' in csv_path:
+                continue
             try:
                 game_folder = os.path.dirname(csv_path)
                 images_dir = os.path.join(game_folder, 'tagged_images') 
