@@ -170,20 +170,23 @@ class SmartChessDataset(Dataset):
         except:
             return None
 
-# --- 3. The Smart Model (ResNet18 Customized) ---
+# --- 3. The Smart Model (ResNet18 Customized with Dropout) ---
 class SmartChessNet(nn.Module):
     def __init__(self, num_classes=13):
         super(SmartChessNet, self).__init__()
         # print("Loading Pre-trained ResNet18...")
         try:
-            # Load a model that already knows how to "see" (ImageNet weights)
             self.base_model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         except:
             self.base_model = models.resnet18(pretrained=True)
             
-        # Replace the last layer to fit our 13 chess classes
         num_ftrs = self.base_model.fc.in_features
-        self.base_model.fc = nn.Linear(num_ftrs, num_classes)
+        
+        # Dropping half the neurons to combat overfitting
+        self.base_model.fc = nn.Sequential(
+            nn.Dropout(p=0.5),
+            nn.Linear(num_ftrs, num_classes)
+        )
 
     def forward(self, x):
         return self.base_model(x)
@@ -194,7 +197,6 @@ def main(args):
     print(f"Device: {device}")
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Create Datasets
     train_ds = SmartChessDataset(args.data_dir, mode='train')
 
     if len(train_ds) == 0:
