@@ -76,22 +76,24 @@ def infer_tile(model, tile_tensor, device, model_type, centroids=None, ood_thres
             logits, embedding = model(tile_tensor)
             probs = F.softmax(logits, dim=1)
             
-            # OOD Check using Centroids if available
+            # Hybrid Approach:
+            # 1. Classification based on Softmax Probabilities (usually more accurate for class ID)
+            conf, pred_idx = torch.max(probs, 1)
+            pred_label = pred_idx.item()
+            
+            # 2. OOD Detection based on Embedding Distance (better for anomaly detection)
             is_ood = False
             if centroids is not None:
                 embedding = F.normalize(embedding, p=2, dim=1)
-                # Compute distances (1, 13)
                 dists = torch.cdist(embedding, centroids, p=2)
-                min_dist, pred_idx = torch.min(dists, dim=1)
+                min_dist, _ = torch.min(dists, dim=1)
+                
                 if min_dist.item() > ood_threshold:
                     is_ood = True
-                pred_label = pred_idx.item()
             else:
-                # Fallback to logits
-                conf, pred_idx = torch.max(probs, 1)
-                pred_label = pred_idx.item()
-                if conf.item() < 0.5: # arbitrary low confidence threshold
-                     is_ood = True
+                # Fallback if no centroids
+                if conf.item() < 0.6:
+                    is_ood = True
 
             return ID_TO_PIECE[pred_label], is_ood
 
@@ -314,33 +316,7 @@ def main():
         fen_img.save(output_filename)
         print(f"Saved generated FEN diagram to {output_filename}")
     
-    # Save overlay as well
-    overlay_filename = "inference_overlay.jpg"
-    draw = ImageDraw.Draw(original_img)
-    w, h = original_img.size
-    cell_w = w / 8
-    cell_h = h / 8
-    
-    for r, c in ood_mask:
-        x_min = c * cell_w
-        y_min = r * cell_h
-        x_max = (c + 1) * cell_w
-        y_max = (r + 1) * cell_h
-        
-        margin_x = cell_w * 0.2
-        margin_y = cell_h * 0.2
-        
-        draw.line(
-            [(x_min + margin_x, y_min + margin_y), (x_max - margin_x, y_max - margin_y)], 
-            fill="red", width=5
-        )
-        draw.line(
-            [(x_min + margin_x, y_max - margin_y), (x_max - margin_x, y_min + margin_y)], 
-            fill="red", width=5
-        )
-        
-    original_img.save(overlay_filename)
-    print(f"Saved original overlay to {overlay_filename}")
+    # Removed overlay on original image as requested
 
 if __name__ == "__main__":
     main()

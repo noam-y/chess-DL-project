@@ -69,19 +69,24 @@ def infer_tile(model, tile_tensor, device, model_type, centroids=None, ood_thres
             logits, embedding = model(tile_tensor)
             probs = F.softmax(logits, dim=1)
             
+            # Hybrid Approach:
+            # 1. Classification based on Softmax Probabilities (usually more accurate for class ID)
+            conf, pred_idx = torch.max(probs, 1)
+            pred_label = pred_idx.item()
+            
+            # 2. OOD Detection based on Embedding Distance (better for anomaly detection)
             is_ood = False
             if centroids is not None:
                 embedding = F.normalize(embedding, p=2, dim=1)
                 dists = torch.cdist(embedding, centroids, p=2)
-                min_dist, pred_idx = torch.min(dists, dim=1)
+                min_dist, _ = torch.min(dists, dim=1)
+                
                 if min_dist.item() > ood_threshold:
                     is_ood = True
-                pred_label = pred_idx.item()
             else:
-                conf, pred_idx = torch.max(probs, 1)
-                pred_label = pred_idx.item()
-                if conf.item() < 0.5:
-                     is_ood = True
+                # Fallback if no centroids
+                if conf.item() < 0.6:
+                    is_ood = True
 
             return ID_TO_PIECE[pred_label], is_ood
 
@@ -192,16 +197,22 @@ def main():
                 show_coordinates=True 
             )
             
-            if os.path.exists(fen_img_path):
+            # Generate OOD Overlay on FEN Image (No coordinates for alignment)
+            ood_fen_path = os.path.join(args.output_dir, "temp_ood_fen.png")
+            cbi.generate_image(
+                fen=fen,
+                output_path=ood_fen_path,
+                size=480,
+                show_coordinates=False
+            )
+            
+            if os.path.exists(fen_img_path) and os.path.exists(ood_fen_path):
                 fen_img = Image.open(fen_img_path).convert("RGB")
+                ood_fen_img = Image.open(ood_fen_path).convert("RGB")
                 
-                # Create Side-by-Side
-                # Resize original to 480x480 for consistency in display
-                display_img = original_img.resize((480, 480))
-                
-                # Draw OOD on display_img
-                draw = ImageDraw.Draw(display_img)
-                w, h = display_img.size
+                # Draw OOD on the clean FEN image (ood_fen_img)
+                draw = ImageDraw.Draw(ood_fen_img)
+                w, h = ood_fen_img.size
                 cell_w = w / 8
                 cell_h = h / 8
                 
@@ -213,23 +224,38 @@ def main():
                     margin_x = cell_w * 0.2
                     margin_y = cell_h * 0.2
                     
-                    draw.line([(x_min + margin_x, y_min + margin_y), (x_max - margin_x, y_max - margin_y)], fill="red", width=3)
-                    draw.line([(x_min + margin_x, y_max - margin_y), (x_max - margin_x, y_min + margin_y)], fill="red", width=3)
-
-                # Combine
-                total_width = display_img.width + fen_img.width
-                max_height = max(display_img.height, fen_img.height)
+                    draw.line([(x_min + margin_x, y_min + margin_y), (x_max - margin_x, y_max - margin_y)], fill="red", width=5)
+                    draw.line([(x_min + margin_x, y_max - margin_y), (x_max - margin_x, y_min + margin_y)], fill="red", width=5)
+                
+                # Now we want the final right-side image to be the FEN diagram with OOD markers.
+                # But wait, if we use the one without coordinates for drawing, it looks different than the one with coordinates.
+                # Let's stick to the user's request: "inference_result.png" style.
+                # In inference.py we generate one with coordinates, then overwrite it with one without coordinates for the OOD drawing.
+                # Let's just use the one without coordinates for the FEN side to ensure OOD alignment is easy.
+                
+                final_fen_img = ood_fen_img # This has the OOD markers drawn on it
+                
+                # Create Side-by-Side
+                # Left: Original Image
+                # Right: FEN Diagram with OOD markers
+                
+                # Resize original to match height of FEN image
+                display_img = original_img.resize((final_fen_img.height, final_fen_img.height))
+                
+                total_width = display_img.width + final_fen_img.width
+                max_height = max(display_img.height, final_fen_img.height)
                 
                 combined = Image.new('RGB', (total_width, max_height), (255, 255, 255))
                 combined.paste(display_img, (0, 0))
-                combined.paste(fen_img, (display_img.width, 0))
+                combined.paste(final_fen_img, (display_img.width, 0))
                 
                 base_name = os.path.basename(img_path)
                 save_path = os.path.join(args.output_dir, f"result_{base_name}")
                 combined.save(save_path)
                 
                 # Cleanup temp
-                os.remove(fen_img_path)
+                if os.path.exists(fen_img_path): os.remove(fen_img_path)
+                if os.path.exists(ood_fen_path): os.remove(ood_fen_path)
                 
         except Exception as e:
             print(f"Error processing {img_path}: {e}")
