@@ -25,7 +25,7 @@ PIECE_TO_ID = {
 ID_TO_PIECE = {v: k for k, v in PIECE_TO_ID.items()}
 ID_TO_PIECE[0] = '1'
 
-# --- 1. Model Definition (Must match train_v2.py exactly) ---
+# --- 1. Model Definition (Standard 3-Channel ResNet) ---
 class SmartChessNet(nn.Module):
     def __init__(self, num_classes=13):
         super(SmartChessNet, self).__init__()
@@ -85,23 +85,27 @@ def compare_fens(true_fen, pred_fen):
     is_perfect = (correct_count == 64)
     return correct_count, is_perfect
 
-# --- 3. Smart Dataset for Evaluation ---
+# --- 3. Smart Dataset for Evaluation (Robust Path Finding) ---
 class SmartEvalDataset(Dataset):
     def __init__(self, csv_file, root_dir):
         self.df = pd.read_csv(csv_file)
+        # Clean column names (remove spaces)
+        self.df.columns = self.df.columns.str.strip()
+        
         self.root_dir = os.path.abspath(root_dir)
+        self.images_dir = os.path.join(self.root_dir, 'tagged_images')
         
-        # *** MUST MATCH TRAIN_V2 ***
-        # If you changed target_size in train_v2.py, change it here too!
+        # If tagged_images doesn't exist, assume images are in root
+        if not os.path.exists(self.images_dir):
+            self.images_dir = self.root_dir
+
         self.target_size = 96 
-        
         self.resize_transform = transforms.Resize((self.target_size, self.target_size))
         
         self.transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-
 
     def crop_square(self, image, row, col):
         """ Contextual Cropping Logic """
@@ -125,13 +129,41 @@ class SmartEvalDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        img_name = row['from_frame']
-        img_path = os.path.join(self.root_dir, img_name)
+        row_data = self.df.iloc[idx]
         
-        if not os.path.exists(img_path):
-            # Fallback if filename is just the name but full path needed
-            pass
+        # === Robust Path Finding Logic ===
+        img_path = None
+        
+        # 1. Try 'filename' column if it exists
+        if 'filename' in row_data:
+            base_name = row_data['filename']
+            # Check in root and tagged_images
+            possible_paths = [
+                os.path.join(self.root_dir, base_name),
+                os.path.join(self.images_dir, base_name)
+            ]
+            for p in possible_paths:
+                if os.path.exists(p):
+                    img_path = p
+                    break
+                    
+        # 2. Try building filename from 'from_frame'- accroding to known csv format
+        if img_path is None and 'from_frame' in row_data:
+            base_name = f"frame_{int(row_data['from_frame']):06d}"
+            for ext in ['.jpg', '.JPG', '.jpeg', '.png']:
+                temp1 = os.path.join(self.images_dir, base_name + ext)
+                temp2 = os.path.join(self.root_dir, base_name + ext)
+                if os.path.exists(temp1):
+                    img_path = temp1
+                    break
+                if os.path.exists(temp2):
+                    img_path = temp2
+                    break
+        
+        if img_path is None or not os.path.exists(img_path):
+            print(f"Warning: Image not found for index {idx}")
+            # Return dummy data to avoid crash
+            return torch.zeros(64, 3, 96, 96), row_data['fen'], "missing"
 
         image = Image.open(img_path).convert('RGB')
         
@@ -143,7 +175,8 @@ class SmartEvalDataset(Dataset):
                 patch = self.transform(patch)
                 patches.append(patch)
         
-        return torch.stack(patches), row['fen'], row['filename']
+        filename_str = os.path.basename(img_path)
+        return torch.stack(patches), row_data['fen'], filename_str
 
 # --- 4. Main Evaluation Loop ---
 def main(args):
@@ -187,8 +220,11 @@ def main(args):
     print("Running Inference...")
     with torch.no_grad():
         for images, true_fens, filenames in tqdm(loader):
+            # Skip missing images
+            if images.shape[1] != 64: continue
+
             Batch_Size = images.shape[0]
-            inputs = images.view(-1, 3, 96, 96).to(DEVICE) # Ensure size matches target_size
+            inputs = images.view(-1, 3, 96, 96).to(DEVICE)
             
             outputs = model(inputs)
             preds_flat = torch.argmax(outputs, dim=1) 
@@ -214,17 +250,20 @@ def main(args):
                     'is_perfect': is_perfect
                 })
 
-    piece_acc = 100 * correct_squares / total_squares if total_squares > 0 else 0
-    board_acc = 100 * perfect_boards / total_boards if total_boards > 0 else 0
-    
-    print("-" * 30)
-    print(f"Piece Accuracy: {piece_acc:.2f}%")
-    print(f"Board Accuracy: {board_acc:.2f}%")
-    print("-" * 30)
+    if total_squares > 0:
+        piece_acc = 100 * correct_squares / total_squares
+        board_acc = 100 * perfect_boards / total_boards
+        
+        print("-" * 30)
+        print(f"Piece Accuracy: {piece_acc:.2f}%")
+        print(f"Board Accuracy: {board_acc:.2f}%")
+        print("-" * 30)
 
-    output_csv = "evaluation_results.csv"
-    pd.DataFrame(results).to_csv(output_csv, index=False)
-    print(f"Results saved to {output_csv}")
+        output_csv = "evaluation_results.csv"
+        pd.DataFrame(results).to_csv(output_csv, index=False)
+        print(f"Results saved to {output_csv}")
+    else:
+        print("No valid images processed.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
