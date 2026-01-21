@@ -115,11 +115,22 @@ def main():
         os.makedirs(args.output_dir)
 
     # Load Model
-    epoch, model_path = get_latest_epoch_model(args.checkpoints_dir)
-    if not model_path:
-        # Try default from inference.py if not found
-        if args.checkpoints_dir == "checkpoints":
-             epoch, model_path = get_latest_epoch_model("checkpoints_resnet_multihead/")
+    if args.model:
+        model_path = os.path.join(args.checkpoints_dir, args.model)
+        if not os.path.exists(model_path):
+             print(f"Error: Model file '{model_path}' not found.")
+             return
+        print(f"Loading specific model from {model_path}")
+        epoch = 0 
+    else:
+        # Try finding 'resnet18_best.pth' first
+        best_path = os.path.join(args.checkpoints_dir, "resnet18_best.pth")
+        if os.path.exists(best_path):
+            model_path = best_path
+            epoch = 0 # unknown
+            print(f"Loading best model from {model_path}")
+        else:
+             epoch, model_path = get_latest_epoch_model(args.checkpoints_dir)
     
     if not model_path:
         print(f"No model found in {args.checkpoints_dir}")
