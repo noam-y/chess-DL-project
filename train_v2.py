@@ -95,11 +95,8 @@ class SmartChessDataset(Dataset):
 
         if mode == 'train':
             self.transform = transforms.Compose([
-                # Strong color augmentations to handle different lighting
-                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
-                transforms.RandomRotation(10), # More rotation allowed due to padding
+                transforms.RandomRotation(5), # More rotation allowed due to padding
                 transforms.ToTensor(),
-                # Normalization required by ResNet (ImageNet stats)
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             ])
         else:
@@ -233,8 +230,7 @@ def main(args):
             
             boards, labels = batch
             
-            # Note: Input size is now 224!
-            inputs = boards.view(-1, 3, 224, 224).to(device)
+            inputs = boards.view(-1, 3, 96, 96).to(device)
             targets = labels.view(-1).to(device)
 
             optimizer.zero_grad()
