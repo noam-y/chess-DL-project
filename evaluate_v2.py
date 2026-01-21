@@ -93,7 +93,7 @@ class SmartEvalDataset(Dataset):
         
         # *** MUST MATCH TRAIN_V2 ***
         # If you changed target_size in train_v2.py, change it here too!
-        self.target_size = 224 
+        self.target_size = 96 
         
         self.resize_transform = transforms.Resize((self.target_size, self.target_size))
         
@@ -126,7 +126,7 @@ class SmartEvalDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img_name = row['filename']
+        img_name = row['from_frame']
         img_path = os.path.join(self.root_dir, img_name)
         
         if not os.path.exists(img_path):
@@ -188,7 +188,7 @@ def main(args):
     with torch.no_grad():
         for images, true_fens, filenames in tqdm(loader):
             Batch_Size = images.shape[0]
-            inputs = images.view(-1, 3, 224, 224).to(DEVICE) # Ensure size matches target_size
+            inputs = images.view(-1, 3, 96, 96).to(DEVICE) # Ensure size matches target_size
             
             outputs = model(inputs)
             preds_flat = torch.argmax(outputs, dim=1) 
