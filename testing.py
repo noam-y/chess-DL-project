@@ -119,7 +119,7 @@ def main():
     if not model_path:
         # Try default from inference.py if not found
         if args.checkpoints_dir == "checkpoints":
-             epoch, model_path = get_latest_epoch_model("checkpoints_resnet_multihead")
+             epoch, model_path = get_latest_epoch_model("checkpoints_resnet_multihead/")
     
     if not model_path:
         print(f"No model found in {args.checkpoints_dir}")
