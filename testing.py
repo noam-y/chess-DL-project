@@ -17,7 +17,7 @@ except ImportError:
     pass
 
 try:
-    from nir_train import ResNetWithEmbeddings, ID_TO_PIECE
+    from nir_train import ResNetMultiHead, ResNetWithEmbeddings, ID_TO_PIECE
 except ImportError:
     # Fallback
     PIECE_TO_ID = {
@@ -65,6 +65,34 @@ def infer_tile(model, tile_tensor, device, model_type, centroids=None, ood_thres
     tile_tensor = tile_tensor.to(device).unsqueeze(0)
     
     with torch.no_grad():
+        if model_type == "ResNetMultiHead":
+            logits_piece, logits_color, embedding = model(tile_tensor)
+            probs_piece = F.softmax(logits_piece, dim=1)
+            probs_color = F.softmax(logits_color, dim=1)
+
+            conf_piece, pred_piece_idx = torch.max(probs_piece, 1)
+            pred_label = pred_piece_idx.item()
+
+            _, pred_color_idx = torch.max(probs_color, 1)
+            pred_color_label = pred_color_idx.item()
+
+            piece_char = ID_TO_PIECE[pred_label]
+            expected_color = 0
+            if piece_char != 'e':
+                expected_color = 1 if piece_char.isupper() else 2
+
+            is_ood = pred_color_label != expected_color
+            dist_val = 0.0
+            if centroids is not None:
+                embedding = F.normalize(embedding, p=2, dim=1)
+                dists = torch.cdist(embedding, centroids, p=2)
+                min_dist, _ = torch.min(dists, dim=1)
+                dist_val = min_dist.item()
+                if dist_val > ood_threshold:
+                    is_ood = True
+
+            return ID_TO_PIECE[pred_label], is_ood, dist_val
+
         if model_type == "ResNetWithEmbeddings":
             logits, embedding = model(tile_tensor)
             probs = F.softmax(logits, dim=1)
@@ -104,7 +132,7 @@ def main():
     parser = argparse.ArgumentParser(description="Batch Inference on Unlabeled Images")
     parser.add_argument("--input_dir", type=str, default="unlalbled", help="Directory with input images")
     parser.add_argument("--output_dir", type=str, default="results", help="Directory to save results")
-    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints_resnet_multihead", help="Directory containing models")
+    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints", help="Directory containing models")
     parser.add_argument("--model", type=str, default=None, help="Specific model filename to load (optional)")
     parser.add_argument("--ood_threshold", type=float, default=0.8, help="Threshold for OOD detection")
     args = parser.parse_args()
@@ -163,7 +191,7 @@ def main():
     model.eval()
     
     centroids = None
-    if model_type == "ResNetWithEmbeddings":
+    if model_type in ("ResNetWithEmbeddings", "ResNetMultiHead"):
         centroids_path = os.path.join(os.path.dirname(model_path), "centroids.pt")
         if os.path.exists(centroids_path):
             centroids = torch.load(centroids_path, map_location=device)
@@ -172,7 +200,7 @@ def main():
     # Transforms
     to_tensor = transforms.ToTensor()
     resnet_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((160, 160)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -200,7 +228,7 @@ def main():
                     upper = r * tile_size
                     tile_img = img_resized.crop((left, upper, left+tile_size, upper+tile_size))
                     
-                    if model_type == "ResNetWithEmbeddings":
+                    if model_type in ("ResNetWithEmbeddings", "ResNetMultiHead"):
                         input_tensor = resnet_transform(tile_img)
                     else:
                         input_tensor = to_tensor(tile_img)
@@ -217,21 +245,11 @@ def main():
             
             # Generate FEN Image
             fen_img_path = os.path.join(args.output_dir, "temp_fen.png")
-            cbi.generate_image(
-                fen_str=fen,
-                output_path=fen_img_path,
-                size=480,
-                show_coordinates=True 
-            )
+            cbi.generate_image(fen, fen_img_path, size=480, show_coordinates=True)
             
             # Generate OOD Overlay on FEN Image (No coordinates for alignment)
             ood_fen_path = os.path.join(args.output_dir, "temp_ood_fen.png")
-            cbi.generate_image(
-                fen_str=fen,
-                output_path=ood_fen_path,
-                size=480,
-                show_coordinates=False
-            )
+            cbi.generate_image(fen, ood_fen_path, size=480, show_coordinates=False)
             
             if os.path.exists(fen_img_path) and os.path.exists(ood_fen_path):
                 fen_img = Image.open(fen_img_path).convert("RGB")

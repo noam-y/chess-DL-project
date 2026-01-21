@@ -17,9 +17,9 @@ except ImportError:
     print("Warning: Could not import PieceClassifier from train.py")
 
 try:
-    from nir_train import ResNetWithEmbeddings, ID_TO_PIECE
+    from nir_train import ResNetMultiHead, ResNetWithEmbeddings, ID_TO_PIECE
 except ImportError:
-    print("Warning: Could not import ResNetWithEmbeddings from nir_train.py")
+    print("Warning: Could not import ResNetMultiHead/ResNetWithEmbeddings from nir_train.py")
     # Fallback ID mapping if import fails
     PIECE_TO_ID = {
         'e': 0, 'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6,
@@ -72,6 +72,32 @@ def infer_tile(model, tile_tensor, device, model_type, centroids=None, ood_thres
     tile_tensor = tile_tensor.to(device).unsqueeze(0) # (1, 3, H, W)
     
     with torch.no_grad():
+        if model_type == "ResNetMultiHead":
+            logits_piece, logits_color, embedding = model(tile_tensor)
+            probs_piece = F.softmax(logits_piece, dim=1)
+            probs_color = F.softmax(logits_color, dim=1)
+
+            conf_piece, pred_piece_idx = torch.max(probs_piece, 1)
+            pred_label = pred_piece_idx.item()
+
+            _, pred_color_idx = torch.max(probs_color, 1)
+            pred_color_label = pred_color_idx.item()  # 0=Empty, 1=White, 2=Black
+
+            piece_char = ID_TO_PIECE[pred_label]
+            expected_color = 0
+            if piece_char != 'e':
+                expected_color = 1 if piece_char.isupper() else 2
+
+            is_ood = pred_color_label != expected_color
+            if centroids is not None:
+                embedding = F.normalize(embedding, p=2, dim=1)
+                dists = torch.cdist(embedding, centroids, p=2)
+                min_dist, _ = torch.min(dists, dim=1)
+                if min_dist.item() > ood_threshold:
+                    is_ood = True
+
+            return ID_TO_PIECE[pred_label], is_ood
+
         if model_type == "ResNetWithEmbeddings":
             logits, embedding = model(tile_tensor)
             probs = F.softmax(logits, dim=1)
@@ -115,7 +141,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Chess Board Inference")
     parser.add_argument("--image", type=str, required=True, help="Path to input image")
-    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints_resnet_multihead", help="Directory containing models")
+    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints", help="Directory containing models")
     parser.add_argument("--model", type=str, default=None, help="Specific model filename to load (optional)")
     parser.add_argument("--ood_threshold", type=float, default=0.8, help="Threshold for OOD detection (distance or confidence)")
     args = parser.parse_args()
@@ -132,26 +158,15 @@ def main():
              return
         print(f"Loading specific model from {model_path}")
     else:
-        epoch, model_path = get_latest_epoch_model(args.checkpoints_dir)
-        if not model_path:
-            # Fallback to looking for 'resnet18_best.pth'
-            best_path = os.path.join(args.checkpoints_dir, "resnet18_best.pth")
-            if os.path.exists(best_path):
-                model_path = best_path
-                print(f"Loading best model from {model_path}")
-            else:
-                # Try finding any 'resnet18_best_*.pth'
-                best_files = glob.glob(os.path.join(args.checkpoints_dir, "resnet18_best_*.pth"))
-                if best_files:
-                    # Sort by accuracy (extracted from filename) or just take last
-                    # Filename format: resnet18_best_bs32_epoch5_acc98.50.pth
-                    best_files.sort(key=os.path.getmtime, reverse=True) # Latest modified
-                    model_path = best_files[0]
-                    print(f"Loading best model (by time) from {model_path}")
-                else:
-                    print(f"No model_epoch_*.pth or resnet18_best.pth files found in {args.checkpoints_dir}")
-                    return
+        best_path = os.path.join(args.checkpoints_dir, "resnet18_best.pth")
+        if os.path.exists(best_path):
+            model_path = best_path
+            print(f"Loading best model from {model_path}")
         else:
+            epoch, model_path = get_latest_epoch_model(args.checkpoints_dir)
+            if not model_path:
+                print(f"No model_epoch_*.pth or resnet18_best.pth files found in {args.checkpoints_dir}")
+                return
             print(f"Loading latest epoch model from {model_path} (Epoch {epoch})")
     
     # 2. Load Model
@@ -160,8 +175,12 @@ def main():
     # Detect Architecture based on state_dict keys
     keys = list(checkpoint.keys())
     if any(k.startswith('backbone') for k in keys):
-        model_type = "ResNetWithEmbeddings"
-        model = ResNetWithEmbeddings(num_classes=13).to(device)
+        if 'fc_color.weight' in keys:
+            model_type = "ResNetMultiHead"
+            model = ResNetMultiHead(num_piece_classes=13, num_color_classes=3).to(device)
+        else:
+            model_type = "ResNetWithEmbeddings"
+            model = ResNetWithEmbeddings(num_classes=13).to(device)
     else:
         model_type = "PieceClassifier"
         model = PieceClassifier(num_classes=13).to(device)
@@ -172,7 +191,7 @@ def main():
     
     # Load Centroids if ResNet
     centroids = None
-    if model_type == "ResNetWithEmbeddings":
+    if model_type in ("ResNetWithEmbeddings", "ResNetMultiHead"):
         centroids_path = os.path.join(args.checkpoints_dir, "centroids.pt")
         if os.path.exists(centroids_path):
             centroids = torch.load(centroids_path, map_location=device)
@@ -240,7 +259,7 @@ def main():
                 tile_img = new_tile
             
             # Prepare tensor
-            if model_type == "ResNetWithEmbeddings":
+            if model_type in ("ResNetWithEmbeddings", "ResNetMultiHead"):
                 input_tensor = resnet_transform(tile_img)
             else:
                 input_tensor = to_tensor(tile_img)
@@ -263,12 +282,7 @@ def main():
     # Generate the base board image from FEN
     # cbi.generate_image returns True on success, saves to path
     print(f"Generating FEN diagram using chessboard-image...")
-    cbi.generate_image(
-        fen=fen,
-        output_path=output_filename,
-        size=480,
-        show_coordinates=True
-    )
+    cbi.generate_image(fen, output_filename, size=480, show_coordinates=True)
     
     # 6. Overlay OOD markers
     # Open the generated image to draw on it
@@ -291,12 +305,7 @@ def main():
         # For robustness, let's disable coordinates for the OOD overlay version to ensure grid alignment
         # Or re-generate without coordinates for the overlay logic.
         
-        cbi.generate_image(
-            fen=fen,
-            output_path=output_filename,
-            size=480,
-            show_coordinates=False
-        )
+        cbi.generate_image(fen, output_filename, size=480, show_coordinates=False)
         fen_img = Image.open(output_filename).convert("RGB")
         draw = ImageDraw.Draw(fen_img)
         w, h = fen_img.size
