@@ -142,8 +142,19 @@ def main():
     
     keys = list(checkpoint.keys())
     if any(k.startswith('backbone') for k in keys):
-        model_type = "ResNetWithEmbeddings"
-        model = ResNetWithEmbeddings(num_classes=13).to(device)
+        # Check if it has color head (new model)
+        if 'fc_color.weight' in keys:
+            model_type = "ResNetMultiHead"
+            model = ResNetMultiHead(num_piece_classes=13, num_color_classes=3).to(device)
+        else:
+            # Fallback for old ResNetWithEmbeddings
+            try:
+                from nir_train import ResNetWithEmbeddings
+                model_type = "ResNetWithEmbeddings"
+                model = ResNetWithEmbeddings(num_classes=13).to(device)
+            except ImportError:
+                print("Error: Old ResNetWithEmbeddings model detected but class definition not found.")
+                return
     else:
         model_type = "PieceClassifier"
         model = PieceClassifier(num_classes=13).to(device)
