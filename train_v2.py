@@ -89,8 +89,7 @@ class SmartChessDataset(Dataset):
             self.transform = transforms.Compose([
                 # Stronger Augmentations for Generalization
                 transforms.RandomHorizontalFlip(p=0.5), # Mirror flip
-                transforms.RandomRotation(15),          # Rotation
-                transforms.RandomGrayscale(p=0.2),      # Force shape learning
+                transforms.RandomRotation(7),          # Rotation
                 transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
