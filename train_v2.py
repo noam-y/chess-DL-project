@@ -16,9 +16,7 @@ from tqdm import tqdm
 # --- 1. Utility Functions ---
 
 def fen_to_tensor(fen_string):
-    """
-    Converts a FEN string (Chess notation) into an 8x8 tensor of integers.
-    """
+    """ Converts FEN string to 8x8 tensor. """
     piece_to_id = {
         'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6,
         'p': 7, 'n': 8, 'b': 9, 'r': 10, 'q': 11, 'k': 12
@@ -38,41 +36,36 @@ def fen_to_tensor(fen_string):
     return torch.from_numpy(board_tensor)
 
 def collate_fn_skip_none(batch):
-    """
-    Filters out corrupted samples (if image loading failed) from the batch.
-    """
+    """ Skips failed images in batch. """
     batch = [item for item in batch if item is not None]
     if len(batch) == 0:
         return None
     return default_collate(batch)
 
-# --- 2. The Improved Dataset (with Contextual Cropping) ---
+# --- 2. Dataset ---
 class SmartChessDataset(Dataset):
-    def __init__(self, root_dir, mode='train'):
+    def __init__(self, root_dir, mode='train', val_game='game6'):
         self.data = []
-        self.mode = mode
-        
-        # 1. Path correction (prevents crashes with relative paths)
+        self.val_game = val_game  
         abs_root = os.path.abspath(root_dir)
         print(f"Scanning: {abs_root}")
         
         csv_files = glob.glob(os.path.join(abs_root, '**', '*.csv'), recursive=True)
-        
         dataframes = []
+        
         for csv_path in csv_files:
-            is_game6 = 'game6' in csv_path
+            is_test_game = self.val_game in csv_path
             
-            # Logic for Training vs Validation sets
-            if mode == 'train' and is_game6:
-                print(f"Skipping {os.path.basename(csv_path)} (Saved for validation)")
+            # Split logic
+            if mode == 'train' and is_test_game:
+                print(f"Skipping {os.path.basename(csv_path)} (Held out for Validation: {self.val_game})")
                 continue
-            elif mode == 'val' and not is_game6:
-                continue # In validation mode, we only want game6
+            elif mode == 'val' and not is_test_game:
+                continue 
 
             try:
                 game_folder = os.path.dirname(csv_path)
                 images_dir = os.path.join(game_folder, 'tagged_images') 
-                
                 if not os.path.exists(images_dir): continue
 
                 df = pd.read_csv(csv_path)
@@ -90,29 +83,26 @@ class SmartChessDataset(Dataset):
             self.full_df = pd.DataFrame()
 
         self.target_size = 96
-        
         self.resize_transform = transforms.Resize((self.target_size, self.target_size))
 
         if mode == 'train':
             self.transform = transforms.Compose([
-                transforms.RandomRotation(5), # More rotation allowed due to padding
+                # Stronger Augmentations for Generalization
+                transforms.RandomHorizontalFlip(p=0.5), # Mirror flip
+                transforms.RandomRotation(15),          # Rotation
+                transforms.RandomGrayscale(p=0.2),      # Force shape learning
+                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             ])
         else:
-            # For testing, we want a clean image
             self.transform = transforms.Compose([
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             ])
 
     def crop_square(self, image, row, col):
-        """
-        The secret to improvement: Contextual Cropping.
-        We crop a square larger than the actual grid cell to capture the 'head' 
-        of tall pieces (like the Queen or King) that might be visually located 
-        in the square above.
-        """
+        """ Contextual Cropping (1.5x square size). """
         width, height = image.size
         square_w = width / 8
         square_h = height / 8
@@ -120,7 +110,6 @@ class SmartChessDataset(Dataset):
         center_x = col * square_w + square_w / 2
         center_y = row * square_h + square_h / 2
         
-        # Factor 1.5 = taking 50% more area from each side
         crop_size = square_w * 1.5 
         
         x1 = max(0, center_x - crop_size / 2)
@@ -136,7 +125,6 @@ class SmartChessDataset(Dataset):
     def __getitem__(self, idx):
         try:
             row = self.full_df.iloc[idx]
-            # Support multiple file extensions
             base_name = f"frame_{int(row['from_frame']):06d}"
             img_path = None
             for ext in ['.jpg', '.JPG', '.jpeg', '.png']:
@@ -153,7 +141,6 @@ class SmartChessDataset(Dataset):
             patches = []
             labels = []
 
-            # Loop over all 64 squares
             for r in range(8):
                 for c in range(8):
                     patch = self.crop_square(image, r, c)
@@ -170,6 +157,7 @@ class SmartChessDataset(Dataset):
         except:
             return None
 
+# --- 3. The Model
 class SmartChessNet(nn.Module):
     def __init__(self, num_classes=13):
         super(SmartChessNet, self).__init__()
@@ -178,7 +166,7 @@ class SmartChessNet(nn.Module):
         except:
             self.base_model = models.resnet18(pretrained=True)
             
-        # Replace the last layer to fit our 13 chess classes
+            
         num_ftrs = self.base_model.fc.in_features
         self.base_model.fc = nn.Linear(num_ftrs, num_classes)
 
@@ -189,13 +177,13 @@ class SmartChessNet(nn.Module):
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    print(f"Holding out game: {args.val_game} for validation") # הדפסה לוידוא
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Create Datasets
-    train_ds = SmartChessDataset(args.data_dir, mode='train')
-
+    train_ds = SmartChessDataset(args.data_dir, mode='train', val_game=args.val_game)
+    
     if len(train_ds) == 0:
-        print("Error: No training data found.")
+        print("Error: No training data found (Maybe check path or val_game name?)")
         return
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, 
@@ -207,9 +195,9 @@ def main(args):
     class_weights[0] = 0.2 
     criterion = nn.CrossEntropyLoss(weight=class_weights)
 
-    # Optimization
-    optimizer = optim.Adam(model.parameters(), lr=0.0005) # Lower LR for Fine-tuning
-    # Scheduler: Accelerates when easy, slows down when stuck (Plateau)
+    # Optimizer targets only the final FC layer (since base is frozen)
+    optimizer = optim.Adam(model.base_model.fc.parameters(), lr=0.001) 
+    
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2)
 
     best_acc = 0.0
@@ -224,7 +212,6 @@ def main(args):
         
         for batch in loop:
             if batch is None: continue
-            
             boards, labels = batch
             
             inputs = boards.view(-1, 3, 96, 96).to(device)
@@ -244,20 +231,16 @@ def main(args):
             
             loop.set_postfix(loss=loss.item(), acc=correct/total)
 
-        # Epoch Summary
         epoch_loss = running_loss / len(train_loader)
         epoch_acc = 100 * correct / total
         
-        # Update Scheduler
         scheduler.step(epoch_loss)
         print(f"Summary Epoch {epoch+1}: Loss={epoch_loss:.4f}, Train Acc={epoch_acc:.2f}%")
 
-        # Save Best Model
         if epoch_acc > best_acc:
             best_acc = epoch_acc
             torch.save(model.state_dict(), os.path.join(args.output_dir, "best_smart_model_v2.pth"))
         
-        # Regular save
         torch.save(model.state_dict(), os.path.join(args.output_dir, f"model_v2_epoch_{epoch+1}.pth"))
 
 if __name__ == "__main__":
@@ -265,7 +248,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=str, required=True)
     parser.add_argument("--output_dir", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=10)
-    # Default is 2 because images are larger and might fill memory
-    parser.add_argument("--batch_size", type=int, default=16) 
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--val_game", type=str, default="game6", help="Name of the game to hold out for validation (e.g. game5)") 
     args = parser.parse_args()
     main(args)
