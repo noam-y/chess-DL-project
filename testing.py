@@ -104,7 +104,7 @@ def main():
     parser = argparse.ArgumentParser(description="Batch Inference on Unlabeled Images")
     parser.add_argument("--input_dir", type=str, default="unlalbled", help="Directory with input images")
     parser.add_argument("--output_dir", type=str, default="results", help="Directory to save results")
-    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints_resnet_triplet", help="Directory containing models")
+    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints_resnet_multihead", help="Directory containing models")
     parser.add_argument("--ood_threshold", type=float, default=0.8, help="Threshold for OOD detection")
     args = parser.parse_args()
 
@@ -119,7 +119,7 @@ def main():
     if not model_path:
         # Try default from inference.py if not found
         if args.checkpoints_dir == "checkpoints":
-             epoch, model_path = get_latest_epoch_model("checkpoints_resnet_triplet")
+             epoch, model_path = get_latest_epoch_model("checkpoints_resnet_multihead")
     
     if not model_path:
         print(f"No model found in {args.checkpoints_dir}")
