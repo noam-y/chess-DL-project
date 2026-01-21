@@ -114,6 +114,7 @@ def main():
     parser = argparse.ArgumentParser(description="Chess Board Inference")
     parser.add_argument("--image", type=str, required=True, help="Path to input image")
     parser.add_argument("--checkpoints_dir", type=str, default="checkpoints_resnet_triplet", help="Directory containing models")
+    parser.add_argument("--model", type=str, default=None, help="Specific model filename to load (optional)")
     parser.add_argument("--ood_threshold", type=float, default=0.8, help="Threshold for OOD detection (distance or confidence)")
     args = parser.parse_args()
     
@@ -122,12 +123,25 @@ def main():
         print(f"Error: Checkpoints directory '{args.checkpoints_dir}' not found.")
         return
 
-    epoch, model_path = get_latest_epoch_model(args.checkpoints_dir)
-    if not model_path:
-        print(f"No model_epoch_*.pth files found in {args.checkpoints_dir}")
-        return
-        
-    print(f"Loading model from {model_path} (Epoch {epoch})")
+    if args.model:
+        model_path = os.path.join(args.checkpoints_dir, args.model)
+        if not os.path.exists(model_path):
+             print(f"Error: Model file '{model_path}' not found.")
+             return
+        print(f"Loading specific model from {model_path}")
+    else:
+        epoch, model_path = get_latest_epoch_model(args.checkpoints_dir)
+        if not model_path:
+            # Fallback to looking for 'resnet18_best.pth'
+            best_path = os.path.join(args.checkpoints_dir, "resnet18_best.pth")
+            if os.path.exists(best_path):
+                model_path = best_path
+                print(f"Loading best model from {model_path}")
+            else:
+                print(f"No model_epoch_*.pth or resnet18_best.pth files found in {args.checkpoints_dir}")
+                return
+        else:
+            print(f"Loading latest epoch model from {model_path} (Epoch {epoch})")
     
     # 2. Load Model
     checkpoint = torch.load(model_path, map_location=device)

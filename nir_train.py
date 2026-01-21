@@ -349,9 +349,14 @@ def main(args):
         # Save Best Model
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            save_path = os.path.join(args.output_dir, "resnet18_best.pth")
+            model_filename = f"resnet18_best_bs{args.batch_size}_epoch{epoch+1}_acc{val_acc:.2f}.pth"
+            save_path = os.path.join(args.output_dir, model_filename)
             torch.save(model.state_dict(), save_path)
             print(f"New best model saved to {save_path} (Acc: {best_val_acc:.2f}%)")
+            
+            # Update 'latest_best.pth' symlink or copy for easy access
+            latest_path = os.path.join(args.output_dir, "resnet18_best.pth")
+            torch.save(model.state_dict(), latest_path)
         else:
             print(f"Validation accuracy did not improve (Best: {best_val_acc:.2f}%)")
 
