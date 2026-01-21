@@ -204,7 +204,7 @@ def main(args):
     # Transforms
     # Add augmentation for training
     train_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((80, 80)),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.5),
         transforms.ToTensor(),
@@ -213,7 +213,7 @@ def main(args):
     
     # Validation transform should not have augmentation
     val_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((80, 80)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])

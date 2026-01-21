@@ -163,13 +163,13 @@ def main():
     img = Image.open(args.image).convert("RGB")
     original_img = img.copy()
     
-    # Resize to 480x480 for cutting (standard from training)
-    img_resized = img.resize((480, 480), resample=Image.BILINEAR)
+    # Resize to 640x640 for cutting (standard from training)
+    img_resized = img.resize((640, 640), resample=Image.BILINEAR)
     
     # Transforms
     to_tensor = transforms.ToTensor()
     resnet_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((80, 80)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -177,7 +177,7 @@ def main():
     board_grid = [] # 8x8 chars
     ood_mask = []   # List of (row, col) that are OOD
     
-    tile_size = 60
+    tile_size = 80
     for r in range(8):
         row_pieces = []
         for c in range(8):
