@@ -1,4 +1,3 @@
-
 import os
 import glob
 import argparse
@@ -45,8 +44,9 @@ def collate_fn_skip_none(batch):
 
 # --- 2. Dataset ---
 class SmartChessDataset(Dataset):
-    def __init__(self, root_dir, mode='train'):
+    def __init__(self, root_dir, mode='train', val_game='game6'):
         self.data = []
+        self.val_game = val_game  
         abs_root = os.path.abspath(root_dir)
         print(f"Scanning: {abs_root}")
         
@@ -54,11 +54,11 @@ class SmartChessDataset(Dataset):
         dataframes = []
         
         for csv_path in csv_files:
-            is_test_game = 'game6' in csv_path
+            is_test_game = self.val_game in csv_path
             
             # Split logic
             if mode == 'train' and is_test_game:
-                print(f"Skipping {os.path.basename(csv_path)} (Validation)")
+                print(f"Skipping {os.path.basename(csv_path)} (Held out for Validation: {self.val_game})")
                 continue
             elif mode == 'val' and not is_test_game:
                 continue 
@@ -89,8 +89,9 @@ class SmartChessDataset(Dataset):
             self.transform = transforms.Compose([
                 # Stronger Augmentations for Generalization
                 transforms.RandomHorizontalFlip(p=0.5), # Mirror flip
-                transforms.RandomRotation(7),          # Rotation
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+                transforms.RandomRotation(15),          # Rotation
+                transforms.RandomGrayscale(p=0.2),      # Force shape learning
+                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             ])
@@ -171,14 +172,19 @@ class SmartChessNet(nn.Module):
 
     def forward(self, x):
         return self.base_model(x)
+
 # --- 4. Training Loop ---
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    print(f"Holding out game: {args.val_game} for validation") # הדפסה לוידוא
     os.makedirs(args.output_dir, exist_ok=True)
 
-    train_ds = SmartChessDataset(args.data_dir, mode='train')
-    if len(train_ds) == 0: return
+    train_ds = SmartChessDataset(args.data_dir, mode='train', val_game=args.val_game)
+    
+    if len(train_ds) == 0:
+        print("Error: No training data found (Maybe check path or val_game name?)")
+        return
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, 
                               collate_fn=collate_fn_skip_none, num_workers=4)
@@ -242,6 +248,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=str, required=True)
     parser.add_argument("--output_dir", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=16) 
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--val_game", type=str, default="game6", help="Name of the game to hold out for validation (e.g. game5)") 
     args = parser.parse_args()
     main(args)
