@@ -184,7 +184,7 @@ class SmartChessNet(nn.Module):
         
         # Dropping half the neurons to combat overfitting
         self.base_model.fc = nn.Sequential(
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=0.3),
             nn.Linear(num_ftrs, num_classes)
         )
 
