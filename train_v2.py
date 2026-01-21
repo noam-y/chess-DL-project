@@ -1,3 +1,4 @@
+
 import os
 import glob
 import argparse
@@ -156,7 +157,7 @@ class SmartChessDataset(Dataset):
         except:
             return None
 
-# --- 3. The Model (FROZEN ResNet, NO Dropout) ---
+# --- 3. The Model
 class SmartChessNet(nn.Module):
     def __init__(self, num_classes=13):
         super(SmartChessNet, self).__init__()
@@ -165,16 +166,12 @@ class SmartChessNet(nn.Module):
         except:
             self.base_model = models.resnet18(pretrained=True)
             
-        # Freeze base model to prevent overfitting
-        for param in self.base_model.parameters():
-            param.requires_grad = False
             
         num_ftrs = self.base_model.fc.in_features
         self.base_model.fc = nn.Linear(num_ftrs, num_classes)
 
     def forward(self, x):
         return self.base_model(x)
-
 # --- 4. Training Loop ---
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
