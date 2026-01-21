@@ -183,7 +183,7 @@ def main():
     # Transforms
     to_tensor = transforms.ToTensor()
     resnet_transform = transforms.Compose([
-        transforms.Resize((80, 80)),
+        transforms.Resize((160, 160)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -191,13 +191,42 @@ def main():
     board_grid = [] # 8x8 chars
     ood_mask = []   # List of (row, col) that are OOD
     
-    tile_size = 80
+    # Tile size is 80, but we crop 160x160 (padding 40px)
+    TILE_SIZE = 80
+    PADDING_PX = 40
+    FINAL_SIZE = 160
+    BOARD_SIZE = 640
+    
     for r in range(8):
         row_pieces = []
         for c in range(8):
-            left = c * tile_size
-            upper = r * tile_size
-            tile_img = img_resized.crop((left, upper, left+tile_size, upper+tile_size))
+            # Calculate base tile coordinates
+            base_left = c * TILE_SIZE
+            base_top = r * TILE_SIZE
+            base_right = base_left + TILE_SIZE
+            base_bottom = base_top + TILE_SIZE
+            
+            # Calculate padded coordinates
+            pad_left = base_left - PADDING_PX
+            pad_top = base_top - PADDING_PX
+            pad_right = base_right + PADDING_PX
+            pad_bottom = base_bottom + PADDING_PX
+            
+            # Handle boundaries
+            crop_left = max(0, pad_left)
+            crop_top = max(0, pad_top)
+            crop_right = min(BOARD_SIZE, pad_right)
+            crop_bottom = min(BOARD_SIZE, pad_bottom)
+            
+            tile_img = img_resized.crop((crop_left, crop_top, crop_right, crop_bottom))
+            
+            # Pad with black if needed
+            if tile_img.size != (FINAL_SIZE, FINAL_SIZE):
+                new_tile = Image.new("RGB", (FINAL_SIZE, FINAL_SIZE), (0, 0, 0))
+                paste_x = abs(pad_left) if pad_left < 0 else 0
+                paste_y = abs(pad_top) if pad_top < 0 else 0
+                new_tile.paste(tile_img, (paste_x, paste_y))
+                tile_img = new_tile
             
             # Prepare tensor
             if model_type == "ResNetWithEmbeddings":

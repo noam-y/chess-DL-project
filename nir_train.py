@@ -204,7 +204,7 @@ def main(args):
     # Transforms
     # Add augmentation for training
     train_transform = transforms.Compose([
-        transforms.Resize((80, 80)),
+        transforms.Resize((160, 160)),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.5),
         transforms.ToTensor(),
@@ -213,48 +213,25 @@ def main(args):
     
     # Validation transform should not have augmentation
     val_transform = transforms.Compose([
-        transforms.Resize((80, 80)),
+        transforms.Resize((160, 160)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    # Dataset Loading & Splitting
-    # We load the full dataset first without transforms to split indices
-    # But to apply different transforms, we need a helper or two dataset instances.
-    # A simpler way given the current setup is to use the subset wrapper logic.
+    # Dataset Loading
+    # We now have explicit train and test directories
+    train_dir = os.path.join(args.data_dir, 'train')
+    test_dir = os.path.join(args.data_dir, 'test')
     
-    full_dataset = ChessTilesDataset(root_dir=args.data_dir, transform=None) # Load without transform initially
-    if len(full_dataset) == 0:
-        print("Dataset is empty. Exiting.")
+    if not os.path.exists(train_dir) or not os.path.exists(test_dir):
+        print(f"Error: Train/Test directories not found in {args.data_dir}")
+        print("Expected structure: data_dir/train and data_dir/test")
         return
 
-    # 80-20 Split
-    train_size = int(0.8 * len(full_dataset))
-    val_size = len(full_dataset) - train_size
-    train_subset, val_subset = random_split(full_dataset, [train_size, val_size])
+    train_dataset = ChessTilesDataset(root_dir=train_dir, transform=train_transform)
+    val_dataset = ChessTilesDataset(root_dir=test_dir, transform=val_transform)
     
-    # Assign transforms to the underlying subsets (hacky but works for standard subsets)
-    # Better approach: Wrap subsets in a custom Dataset class that applies the transform
-    class SubsetWithTransform(Dataset):
-        def __init__(self, subset, transform=None):
-            self.subset = subset
-            self.transform = transform
-            
-        def __len__(self):
-            return len(self.subset)
-            
-        def __getitem__(self, idx):
-            # The underlying dataset (full_dataset) returns (image, label) where image is PIL
-            # because we initialized it with transform=None
-            image, label = self.subset[idx]
-            if self.transform:
-                image = self.transform(image)
-            return image, label
-
-    train_dataset = SubsetWithTransform(train_subset, transform=train_transform)
-    val_dataset = SubsetWithTransform(val_subset, transform=val_transform)
-    
-    print(f"Data Split: {train_size} Training samples, {val_size} Validation samples.")
+    print(f"Data Loaded: {len(train_dataset)} Training samples, {len(val_dataset)} Validation/Test samples.")
 
     # DataLoaders
     # Note: drop_last=True for train to help triplet mining. 
