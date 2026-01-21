@@ -35,7 +35,10 @@ class SmartChessNet(nn.Module):
             self.base_model = models.resnet18(pretrained=False)
             
         num_ftrs = self.base_model.fc.in_features
-        self.base_model.fc = nn.Linear(num_ftrs, num_classes)
+        self.base_model.fc = nn.Sequential(
+            nn.Dropout(p=0.5),
+            nn.Linear(num_ftrs, num_classes)
+        )
 
     def forward(self, x):
         return self.base_model(x)
@@ -91,8 +94,7 @@ class SmartEvalDataset(Dataset):
         self.df = pd.read_csv(csv_file)
         self.root_dir = os.path.abspath(root_dir)
         
-        # *** MUST MATCH TRAIN_V2 ***
-        # If you changed target_size in train_v2.py, change it here too!
+        # Must match train_v2.py
         self.target_size = 96 
         
         self.resize_transform = transforms.Resize((self.target_size, self.target_size))
@@ -103,7 +105,6 @@ class SmartEvalDataset(Dataset):
         ])
 
     def crop_square(self, image, row, col):
-        """ Contextual Cropping Logic """
         width, height = image.size
         square_w = width / 8
         square_h = height / 8
@@ -129,7 +130,6 @@ class SmartEvalDataset(Dataset):
         img_path = os.path.join(self.root_dir, img_name)
         
         if not os.path.exists(img_path):
-            # Fallback if filename is just the name but full path needed
             pass
 
         image = Image.open(img_path).convert('RGB')
@@ -187,7 +187,7 @@ def main(args):
     with torch.no_grad():
         for images, true_fens, filenames in tqdm(loader):
             Batch_Size = images.shape[0]
-            inputs = images.view(-1, 3, 96, 96).to(DEVICE) # Ensure size matches target_size
+            inputs = images.view(-1, 3, 96, 96).to(DEVICE)
             
             outputs = model(inputs)
             preds_flat = torch.argmax(outputs, dim=1) 
