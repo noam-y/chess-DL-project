@@ -22,6 +22,15 @@ PIECE_TO_ID = {
 
 ID_TO_PIECE = {v: k for k, v in PIECE_TO_ID.items()}
 
+# Color Mapping: 0=Empty, 1=White, 2=Black
+def get_color_label(piece_char):
+    if piece_char == 'e':
+        return 0
+    elif piece_char.isupper():
+        return 1 # White
+    else:
+        return 2 # Black
+
 # --- 2. Dataset Definition ---
 class ChessTilesDataset(Dataset):
     def __init__(self, root_dir, transform=None):
@@ -47,17 +56,21 @@ class ChessTilesDataset(Dataset):
         img_path = os.path.join(self.images_dir, img_name)
         image = Image.open(img_path).convert("RGB")
         
-        label = PIECE_TO_ID.get(label_str, 0) # Default to 0 (empty)
+        # Piece Label (0-12)
+        piece_label = PIECE_TO_ID.get(label_str, 0)
+        
+        # Color Label (0-2)
+        color_label = get_color_label(label_str)
         
         if self.transform:
             image = self.transform(image)
             
-        return image, label
+        return image, piece_label, color_label
 
-# --- 3. Model Definition (Embedder + Classifier) ---
-class ResNetWithEmbeddings(nn.Module):
-    def __init__(self, num_classes=13):
-        super(ResNetWithEmbeddings, self).__init__()
+# --- 3. Model Definition (Embedder + 2 Classifiers) ---
+class ResNetMultiHead(nn.Module):
+    def __init__(self, num_piece_classes=13, num_color_classes=3):
+        super(ResNetMultiHead, self).__init__()
         # Load pretrained ResNet18
         base_model = models.resnet18(weights=ResNet18_Weights.DEFAULT)
         
@@ -67,26 +80,30 @@ class ResNetWithEmbeddings(nn.Module):
         # Get input dimension for the FC layer (usually 512 for ResNet18)
         num_ftrs = base_model.fc.in_features
         
-        # New classification head
-        self.fc = nn.Linear(num_ftrs, num_classes)
+        # Head 1: Piece Classification (13 classes)
+        self.fc_piece = nn.Linear(num_ftrs, num_piece_classes)
+        
+        # Head 2: Color Classification (3 classes)
+        self.fc_color = nn.Linear(num_ftrs, num_color_classes)
         
     def forward(self, x):
         # Extract features
         x = self.backbone(x)
         x = x.view(x.size(0), -1) # Flatten (batch_size, 512)
         
-        embeddings = x  # These are the features we'll use for Triplet Loss
-        logits = self.fc(x) # These are for CrossEntropy / Classification
+        embeddings = x  # Features for Triplet Loss
         
-        return logits, embeddings
+        logits_piece = self.fc_piece(x)
+        logits_color = self.fc_color(x)
+        
+        return logits_piece, logits_color, embeddings
 
 # --- 4. Triplet Loss Implementation (Batch Hard) ---
 def batch_hard_triplet_loss(embeddings, labels, margin=1.0, device='cpu'):
     """
-    Computes Batch Hard Triplet Loss.
-    For each anchor, pick the hardest positive (furthest) and hardest negative (closest).
+    Computes Batch Hard Triplet Loss based on PIECE labels.
     """
-    # Normalize embeddings (optional but recommended for triplet loss)
+    # Normalize embeddings
     embeddings = F.normalize(embeddings, p=2, dim=1)
     
     # Pairwise Euclidean distances
@@ -104,19 +121,14 @@ def batch_hard_triplet_loss(embeddings, labels, margin=1.0, device='cpu'):
     valid_triplets = 0
     
     for i in range(batch_size):
-        # Hardest Positive: Max distance among positives
         pos_dists = dists[i][pos_mask[i]]
-        if len(pos_dists) == 0:
-            continue # No positive pair for this anchor in this batch
+        if len(pos_dists) == 0: continue
         hardest_pos = torch.max(pos_dists)
         
-        # Hardest Negative: Min distance among negatives
         neg_dists = dists[i][neg_mask[i]]
-        if len(neg_dists) == 0:
-            continue # Should not happen if batch has >1 class
+        if len(neg_dists) == 0: continue
         hardest_neg = torch.min(neg_dists)
         
-        # Loss = max(0, d_pos - d_neg + margin)
         current_loss = torch.relu(hardest_pos - hardest_neg + margin)
         loss += current_loss
         valid_triplets += 1
@@ -126,7 +138,7 @@ def batch_hard_triplet_loss(embeddings, labels, margin=1.0, device='cpu'):
         
     return loss
 
-# --- 5. Centroid Computation & OOD Logic ---
+# --- 5. Centroid Computation & Evaluation ---
 def compute_centroids(model, dataloader, device, num_classes=13):
     print("Computing class centroids (from Train Set)...")
     model.eval()
@@ -135,23 +147,21 @@ def compute_centroids(model, dataloader, device, num_classes=13):
     class_counts = torch.zeros(num_classes).to(device)
     
     with torch.no_grad():
-        for images, labels in tqdm(dataloader, desc="Computing Centroids"):
+        for images, piece_labels, _ in tqdm(dataloader, desc="Computing Centroids"):
             images = images.to(device)
-            labels = labels.to(device)
+            piece_labels = piece_labels.to(device)
             
-            _, embeddings = model(images)
+            _, _, embeddings = model(images)
             embeddings = F.normalize(embeddings, p=2, dim=1)
             
-            for i in range(len(labels)):
-                label = labels[i]
+            for i in range(len(piece_labels)):
+                label = piece_labels[i]
                 centroids[label] += embeddings[i]
                 class_counts[label] += 1
                 
-    # Normalize
     for c in range(num_classes):
         if class_counts[c] > 0:
             centroids[c] /= class_counts[c]
-            # Re-normalize centroid to unit sphere
             centroids[c] = F.normalize(centroids[c].unsqueeze(0), p=2, dim=1).squeeze(0)
             
     return centroids
@@ -159,50 +169,52 @@ def compute_centroids(model, dataloader, device, num_classes=13):
 def evaluate_model(model, dataloader, device, set_name="Validation"):
     print(f"\nRunning Evaluation on {set_name} Set...")
     model.eval()
-    all_preds = []
-    all_targets = []
+    
+    all_preds_piece = []
+    all_targets_piece = []
+    all_preds_color = []
+    all_targets_color = []
     
     with torch.no_grad():
-        for images, labels in tqdm(dataloader, desc=f"Evaluating {set_name}"):
+        for images, piece_labels, color_labels in tqdm(dataloader, desc=f"Evaluating {set_name}"):
             images = images.to(device)
-            labels = labels.to(device)
+            piece_labels = piece_labels.to(device)
+            color_labels = color_labels.to(device)
             
-            logits, _ = model(images)
-            _, predicted = torch.max(logits.data, 1)
+            logits_piece, logits_color, _ = model(images)
             
-            all_preds.extend(predicted.cpu().numpy())
-            all_targets.extend(labels.cpu().numpy())
+            _, pred_piece = torch.max(logits_piece.data, 1)
+            _, pred_color = torch.max(logits_color.data, 1)
+            
+            all_preds_piece.extend(pred_piece.cpu().numpy())
+            all_targets_piece.extend(piece_labels.cpu().numpy())
+            
+            all_preds_color.extend(pred_color.cpu().numpy())
+            all_targets_color.extend(color_labels.cpu().numpy())
 
-    print(f"\n{set_name} Set Detailed Report:")
-    
-    # Use unique labels present in the targets to avoid index errors if some classes are missing
-    unique_labels = sorted(list(set(all_targets)))
+    print(f"\n--- {set_name} PIECE Classification Report ---")
+    unique_labels = sorted(list(set(all_targets_piece)))
     target_names_present = [ID_TO_PIECE[i] for i in unique_labels]
+    print(classification_report(all_targets_piece, all_preds_piece, zero_division=0, target_names=target_names_present, labels=unique_labels))
     
-    print(classification_report(all_targets, all_preds, zero_division=0, target_names=target_names_present, labels=unique_labels))
+    print(f"\n--- {set_name} COLOR Classification Report ---")
+    print(classification_report(all_targets_color, all_preds_color, zero_division=0, target_names=['Empty', 'White', 'Black']))
     
-    print(f"{set_name} Confusion Matrix:")
-    print(confusion_matrix(all_targets, all_preds, labels=unique_labels))
-    
-    # Return overall accuracy for simple tracking
-    correct = sum(p == t for p, t in zip(all_preds, all_targets))
-    return 100.0 * correct / len(all_targets)
+    # Return piece accuracy for tracking best model
+    correct = sum(p == t for p, t in zip(all_preds_piece, all_targets_piece))
+    return 100.0 * correct / len(all_targets_piece)
 
 # --- 6. Main Training Function ---
 def main(args):
-    # Device
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
         device = torch.device(args.device)
     
     print(f"Starting training on: {device}")
-    
-    # Directories
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Transforms
-    # Add augmentation for training
     train_transform = transforms.Compose([
         transforms.Resize((160, 160)),
         transforms.RandomHorizontalFlip(p=0.5),
@@ -211,7 +223,6 @@ def main(args):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     
-    # Validation transform should not have augmentation
     val_transform = transforms.Compose([
         transforms.Resize((160, 160)),
         transforms.ToTensor(),
@@ -219,13 +230,11 @@ def main(args):
     ])
 
     # Dataset Loading
-    # We now have explicit train and test directories
     train_dir = os.path.join(args.data_dir, 'train')
     test_dir = os.path.join(args.data_dir, 'test')
     
     if not os.path.exists(train_dir) or not os.path.exists(test_dir):
         print(f"Error: Train/Test directories not found in {args.data_dir}")
-        print("Expected structure: data_dir/train and data_dir/test")
         return
 
     train_dataset = ChessTilesDataset(root_dir=train_dir, transform=train_transform)
@@ -233,162 +242,141 @@ def main(args):
     
     print(f"Data Loaded: {len(train_dataset)} Training samples, {len(val_dataset)} Validation/Test samples.")
 
-    # DataLoaders
-    # Note: drop_last=True for train to help triplet mining. 
-    # For validation, we want to evaluate everything, so drop_last=False.
+    # Assign transforms to subsets (Wrapper logic)
+    class SubsetWithTransform(Dataset):
+        def __init__(self, subset, transform=None):
+            self.subset = subset
+            self.transform = transform
+        def __len__(self): return len(self.subset)
+        def __getitem__(self, idx):
+            # Underlying dataset returns (img, piece, color)
+            img, piece, color = self.subset[idx]
+            if self.transform: img = self.transform(img)
+            return img, piece, color
+
+    # Since we loaded separate datasets with transforms already, we don't need the wrapper here
+    # unless we want to split the *train_dataset* further for validation.
+    # But the prompt implies using the 'test' folder as validation.
+    # Let's stick to train_dataset for training and val_dataset for validation.
+    
     batch_size = max(args.batch_size, 8) 
-    
-    train_loader = DataLoader(
-        train_dataset, 
-        batch_size=batch_size, 
-        shuffle=True, 
-        num_workers=4,
-        drop_last=True 
-    )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=4,
-        drop_last=False
-    )
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, drop_last=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, drop_last=False)
 
     # Model
-    print("Initializing ResNet18 with Triplet Loss support...")
-    model = ResNetWithEmbeddings(num_classes=13).to(device)
+    print("Initializing ResNet18 MultiHead...")
+    model = ResNetMultiHead(num_piece_classes=13, num_color_classes=3).to(device)
 
     # Losses
-    class_weights = torch.ones(13)
-    class_weights[0] = 0.1 
-    class_weights = class_weights.to(device)
-    ce_criterion = nn.CrossEntropyLoss(weight=class_weights)
+    # Piece Loss (Weighted)
+    piece_weights = torch.ones(13).to(device)
+    piece_weights[0] = 0.1 
+    criterion_piece = nn.CrossEntropyLoss(weight=piece_weights)
+    
+    # Color Loss (Weighted - Empty is dominant)
+    color_weights = torch.tensor([0.1, 1.0, 1.0]).to(device)
+    criterion_color = nn.CrossEntropyLoss(weight=color_weights)
     
     triplet_margin = 1.0
-    
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
-
     best_val_acc = 0.0
 
     # Training Loop
     for epoch in range(args.epochs):
         model.train()
-        running_ce_loss = 0.0
-        running_triplet_loss = 0.0
-        correct = 0
+        running_loss_p = 0.0
+        running_loss_c = 0.0
+        running_loss_t = 0.0
+        correct_p = 0
+        correct_c = 0
         total = 0
         
         loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
         
-        for images, labels in loop:
+        for images, piece_labels, color_labels in loop:
             images = images.to(device)
-            labels = labels.to(device)
+            piece_labels = piece_labels.to(device)
+            color_labels = color_labels.to(device)
             
             optimizer.zero_grad()
             
-            # Forward
-            logits, embeddings = model(images)
+            logits_piece, logits_color, embeddings = model(images)
             
-            # Compute Losses
-            ce_loss = ce_criterion(logits, labels)
-            tri_loss = batch_hard_triplet_loss(embeddings, labels, margin=triplet_margin, device=device)
+            loss_piece = criterion_piece(logits_piece, piece_labels)
+            loss_color = criterion_color(logits_color, color_labels)
+            loss_triplet = batch_hard_triplet_loss(embeddings, piece_labels, margin=triplet_margin, device=device)
             
-            # Combined Loss
-            total_loss = ce_loss + tri_loss
-            
+            total_loss = loss_piece + loss_color + loss_triplet
             total_loss.backward()
             optimizer.step()
 
             # Stats
-            running_ce_loss += ce_loss.item()
-            running_triplet_loss += tri_loss.item()
+            running_loss_p += loss_piece.item()
+            running_loss_c += loss_color.item()
+            running_loss_t += loss_triplet.item()
             
-            _, predicted = torch.max(logits.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+            _, pred_p = torch.max(logits_piece.data, 1)
+            _, pred_c = torch.max(logits_color.data, 1)
+            
+            total += piece_labels.size(0)
+            correct_p += (pred_p == piece_labels).sum().item()
+            correct_c += (pred_c == color_labels).sum().item()
             
             loop.set_postfix(
-                ce_loss=f"{ce_loss.item():.3f}", 
-                tri_loss=f"{tri_loss.item():.3f}", 
-                acc=f"{100.*correct/total:.1f}%"
+                lp=f"{loss_piece.item():.2f}", 
+                lc=f"{loss_color.item():.2f}", 
+                lt=f"{loss_triplet.item():.2f}",
+                acc_p=f"{100.*correct_p/total:.1f}%"
             )
 
-        # End of epoch stats
-        epoch_ce = running_ce_loss / len(train_loader)
-        epoch_tri = running_triplet_loss / len(train_loader)
-        epoch_acc = 100. * correct / total
-        print(f"Epoch {epoch+1} Training Summary: CE_Loss={epoch_ce:.4f}, Triplet_Loss={epoch_tri:.4f}, Train_Acc={epoch_acc:.2f}%")
-        
-        # --- Validation Step ---
+        # Validation
         val_acc = evaluate_model(model, val_loader, device, set_name="Validation")
-        print(f"Epoch {epoch+1} Validation Accuracy: {val_acc:.2f}%")
+        print(f"Epoch {epoch+1} Validation Piece Accuracy: {val_acc:.2f}%")
         
-        # Save Best Model
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             model_filename = f"resnet18_best_bs{args.batch_size}_epoch{epoch+1}_acc{val_acc:.2f}.pth"
             save_path = os.path.join(args.output_dir, model_filename)
             torch.save(model.state_dict(), save_path)
-            print(f"New best model saved to {save_path} (Acc: {best_val_acc:.2f}%)")
+            print(f"New best model saved to {save_path}")
             
-            # Update 'latest_best.pth' symlink or copy for easy access
             latest_path = os.path.join(args.output_dir, "resnet18_best.pth")
             torch.save(model.state_dict(), latest_path)
-        else:
-            print(f"Validation accuracy did not improve (Best: {best_val_acc:.2f}%)")
 
-    # Compute and Save Centroids (Using Training Set)
-    # Load best model for centroid computation
+    # OOD Stats (using best model)
     best_model_path = os.path.join(args.output_dir, "resnet18_best.pth")
     if os.path.exists(best_model_path):
-        print("Loading best model for centroid computation...")
         model.load_state_dict(torch.load(best_model_path))
     
     centroids = compute_centroids(model, train_loader, device)
     torch.save(centroids, os.path.join(args.output_dir, "centroids.pt"))
-    print(f"Centroids saved to {os.path.join(args.output_dir, 'centroids.pt')}")
-
-    # OOD Demonstration (on Validation set to be fair)
-    print(f"\nOOD Statistics on Validation Set (Threshold: {args.ood_threshold}):")
+    
+    # OOD Check
+    print(f"\nOOD Statistics (Threshold: {args.ood_threshold}):")
     distances = []
     ood_count = 0
     with torch.no_grad():
-         for images, labels in tqdm(val_loader, desc="Checking OOD stats"):
+         for images, _, _ in tqdm(val_loader, desc="Checking OOD stats"):
             images = images.to(device)
-            _, embeddings = model(images)
+            _, _, embeddings = model(images)
             embeddings = F.normalize(embeddings, p=2, dim=1)
-            
-            # Batch distance calculation
             dists = torch.cdist(embeddings, centroids.unsqueeze(0), p=2).squeeze(0)
             min_dists, _ = torch.min(dists, dim=1)
-            
             distances.extend(min_dists.cpu().numpy())
             ood_count += (min_dists > args.ood_threshold).sum().item()
             
-    avg_dist = np.mean(distances)
-    max_dist = np.max(distances)
-    p95_dist = np.percentile(distances, 95)
-    p99_dist = np.percentile(distances, 99)
-    
-    print(f"Average Distance to Nearest Centroid: {avg_dist:.4f}")
-    print(f"95th Percentile Distance: {p95_dist:.4f}")
-    print(f"99th Percentile Distance: {p99_dist:.4f}")
-    print(f"Max Distance to Nearest Centroid: {max_dist:.4f}")
-    print(f"Flagged as OOD (Threshold > {args.ood_threshold}): {ood_count} / {len(val_dataset)} ({100.0 * ood_count / len(val_dataset):.2f}%)")
-
+    print(f"Avg Dist: {np.mean(distances):.4f}, Max Dist: {np.max(distances):.4f}")
+    print(f"99th Percentile: {np.percentile(distances, 99):.4f}")
+    print(f"Flagged OOD: {ood_count}/{len(val_dataset)} ({100.0*ood_count/len(val_dataset):.2f}%)")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train ResNet with Triplet Loss on Chess Tiles")
-    
-    parser.add_argument("--data_dir", type=str, required=True, help="Path to dataset")
-    parser.add_argument("--output_dir", type=str, default="./checkpoints_resnet_triplet", help="Where to save the model")
-    
-    parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
-    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
-    parser.add_argument("--ood_threshold", type=float, default=0.6, help="Distance threshold for OOD detection")
-    parser.add_argument("--device", type=str, default="auto", help="Device to use: 'auto', 'cuda', 'cpu'")
-
+    parser = argparse.ArgumentParser(description="Train ResNet MultiHead")
+    parser.add_argument("--data_dir", type=str, required=True)
+    parser.add_argument("--output_dir", type=str, default="./checkpoints_resnet_multihead")
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--ood_threshold", type=float, default=0.6)
+    parser.add_argument("--device", type=str, default="auto")
     args = parser.parse_args()
-    
     main(args)

@@ -70,25 +70,27 @@ def infer_tile(model, tile_tensor, device, model_type, centroids=None, ood_thres
             probs = F.softmax(logits, dim=1)
             
             # Hybrid Approach:
-            # 1. Classification based on Softmax Probabilities (usually more accurate for class ID)
+            # 1. Classification based on Softmax Probabilities
             conf, pred_idx = torch.max(probs, 1)
             pred_label = pred_idx.item()
             
-            # 2. OOD Detection based on Embedding Distance (better for anomaly detection)
+            # 2. OOD Detection based on Embedding Distance
             is_ood = False
+            dist_val = 0.0
             if centroids is not None:
                 embedding = F.normalize(embedding, p=2, dim=1)
                 dists = torch.cdist(embedding, centroids, p=2)
                 min_dist, _ = torch.min(dists, dim=1)
+                dist_val = min_dist.item()
                 
-                if min_dist.item() > ood_threshold:
+                if dist_val > ood_threshold:
                     is_ood = True
             else:
                 # Fallback if no centroids
                 if conf.item() < 0.6:
                     is_ood = True
 
-            return ID_TO_PIECE[pred_label], is_ood
+            return ID_TO_PIECE[pred_label], is_ood, dist_val
 
         else:
             logits = model(tile_tensor)
@@ -96,7 +98,7 @@ def infer_tile(model, tile_tensor, device, model_type, centroids=None, ood_thres
             conf, pred_idx = torch.max(probs, 1)
             pred_label = pred_idx.item()
             is_ood = conf.item() < 0.6 
-            return ID_TO_PIECE.get(pred_label, 'e'), is_ood
+            return ID_TO_PIECE.get(pred_label, 'e'), is_ood, 0.0
 
 def main():
     parser = argparse.ArgumentParser(description="Batch Inference on Unlabeled Images")
@@ -180,10 +182,12 @@ def main():
                     else:
                         input_tensor = to_tensor(tile_img)
                         
-                    piece, is_ood = infer_tile(model, input_tensor, device, model_type, centroids, args.ood_threshold)
+                    piece, is_ood, dist_val = infer_tile(model, input_tensor, device, model_type, centroids, args.ood_threshold)
                     row_pieces.append(piece)
                     if is_ood:
                         ood_mask.append((r, c))
+                        # Optional: Print distance for debugging
+                        # print(f"OOD at ({r},{c}): {piece} dist={dist_val:.4f}")
                 board_grid.append(row_pieces)
             
             fen = fen_from_board(board_grid)
@@ -191,7 +195,7 @@ def main():
             # Generate FEN Image
             fen_img_path = os.path.join(args.output_dir, "temp_fen.png")
             cbi.generate_image(
-                fen=fen,
+                fen_str=fen,
                 output_path=fen_img_path,
                 size=480,
                 show_coordinates=True 
@@ -200,7 +204,7 @@ def main():
             # Generate OOD Overlay on FEN Image (No coordinates for alignment)
             ood_fen_path = os.path.join(args.output_dir, "temp_ood_fen.png")
             cbi.generate_image(
-                fen=fen,
+                fen_str=fen,
                 output_path=ood_fen_path,
                 size=480,
                 show_coordinates=False
