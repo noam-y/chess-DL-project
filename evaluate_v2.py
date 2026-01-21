@@ -36,7 +36,7 @@ class SmartChessNet(nn.Module):
             
         num_ftrs = self.base_model.fc.in_features
         self.base_model.fc = nn.Sequential(
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=0.3),
             nn.Linear(num_ftrs, num_classes)
         )
 
