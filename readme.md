@@ -65,6 +65,10 @@ module load anaconda
 source activate chess_env
 python train.py --data_dir ./assets/labeled_data --epochs 1 --batch_size 4
 
+#### trouble: cant connect after receiving cluster?
+''' squeue -u noamjeh '''
+then - copy the nodelist- server name and connect to it via ssh. :)
+
 
 ## 📊 Evaluation
 
