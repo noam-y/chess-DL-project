@@ -85,10 +85,10 @@ class EvalDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img_path = os.path.join(self.root_dir, row['filename'])
+        img_path = os.path.join(self.root_dir, row['from_frame'])
         image = Image.open(img_path).convert('RGB')
         image = self.transform(image)
-        return image, row['fen'], row['filename']
+        return image, row['fen'], row['from_frame']
 
 def main(args):
     csv_path = os.path.join(args.test_dir, args.csv_name)
@@ -156,7 +156,7 @@ def main(args):
                     perfect_boards += 1
                 
                 results.append({
-                    'filename': filenames[i],
+                    'from_frame': filenames[i],
                     'true_fen': true_fen_str,
                     'pred_fen': pred_fen_str,
                     'accuracy': correct / 64.0,
