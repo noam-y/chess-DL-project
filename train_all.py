@@ -11,6 +11,7 @@ import glob
 import pandas as pd
 from torchvision import transforms
 from PIL import Image
+import inspect
 
 def load_model_module(model_file_path):
     spec = importlib.util.spec_from_file_location("model_module", model_file_path)
@@ -19,10 +20,40 @@ def load_model_module(model_file_path):
     spec.loader.exec_module(module)
     
     # Find the class that implements ChessModelProtocol
+    # We need to find a class that inherits from BaseChessModel (or ChessModelProtocol)
+    # AND is NOT BaseChessModel itself (which is abstract).
+    
+    found_class = None
     for name, obj in module.__dict__.items():
-        if isinstance(obj, type) and name != "ChessModelProtocol" and "ChessModelProtocol" in [b.__name__ for b in obj.__bases__]:
-            return obj()
-    raise ValueError("No class implementing ChessModelProtocol found in the provided file.")
+        if isinstance(obj, type):
+            # Check if it inherits from ChessModelProtocol (directly or indirectly)
+            bases = [b.__name__ for b in obj.__mro__]
+            if "ChessModelProtocol" in bases:
+                # Skip the abstract base classes themselves
+                if name in ["ChessModelProtocol", "BaseChessModel"]:
+                    continue
+                
+                # CRITICAL FIX: Only pick classes defined IN THIS MODULE
+                # This prevents picking up BaseChessModel which is imported
+                if obj.__module__ != "model_module":
+                    continue
+                
+                # Ensure it's not abstract
+                if inspect.isabstract(obj):
+                    continue
+
+                found_class = obj
+                break
+    
+    if found_class:
+        return found_class()
+    else:
+        # Fallback: print what was found to help debug
+        print(f"Debug: Classes found in {model_file_path}:")
+        for name, obj in module.__dict__.items():
+            if isinstance(obj, type):
+                print(f" - {name} (Module: {obj.__module__})")
+        raise ValueError("No concrete class implementing ChessModelProtocol found in the provided file.")
 
 def find_games(root_dir):
     abs_root = os.path.abspath(root_dir)
