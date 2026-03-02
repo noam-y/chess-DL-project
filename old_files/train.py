@@ -7,9 +7,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, default_collate
+from sklearn.metrics import classification_report, confusion_matrix
 from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
+
 
 # --- 1. Utility Functions ---
 def fen_to_tensor(fen_string):
@@ -31,30 +33,32 @@ def fen_to_tensor(fen_string):
                 c += 1
     return torch.from_numpy(board_tensor)
 
+
 def collate_fn_skip_none(batch):
     batch = [item for item in batch if item is not None]
     if len(batch) == 0:
         return None
     return default_collate(batch)
 
+
 # --- 2. Dataset Definition ---
 class ChessPatchesDataset(Dataset):
     def __init__(self, root_dir, transform=None):
         self.transform = transform
         self.data = []
-        
+
         # חיפוש CSV באופן רקורסיבי
         csv_files = glob.glob(os.path.join(root_dir, '**', '*.csv'), recursive=True)
         print(f"Found {len(csv_files)} CSV files in {root_dir}")
 
         dataframes = []
         for csv_path in csv_files:
+            if 'game6' in csv_path:
+                continue
             try:
-                # הנחה: מבנה התיקיות הוא כמו ב-Colab
-                # אם בקלאסטר המבנה שונה, יש להתאים את השורה הבאה
                 game_folder = os.path.dirname(csv_path)
-                images_dir = os.path.join(game_folder, 'tagged_images') 
-                
+                images_dir = os.path.join(game_folder, 'tagged_images')
+
                 if not os.path.exists(images_dir):
                     continue
 
@@ -62,6 +66,7 @@ class ChessPatchesDataset(Dataset):
                 df.columns = df.columns.str.strip()
                 if 'from_frame' in df.columns and 'fen' in df.columns:
                     df['image_dir_path'] = images_dir
+                    df['source_csv'] = csv_path
                     dataframes.append(df)
             except Exception as e:
                 print(f"Error reading {csv_path}: {e}")
@@ -87,26 +92,33 @@ class ChessPatchesDataset(Dataset):
 
             img_name = f"frame_{frame_id:06d}.jpg"
             img_path = os.path.join(img_dir, img_name)
-            
+
             image = Image.open(img_path).convert("RGB")
             label_board = fen_to_tensor(fen_label)
 
             # Preprocessing
             image = self.resize(image)
-            image = self.to_tensor(image) # (3, 480, 480)
+            image = self.to_tensor(image)  # (3, 480, 480)
 
             # Cutting to patches
             patch_size = 60
             patches = image.unfold(1, patch_size, patch_size).unfold(2, patch_size, patch_size)
             patches = patches.permute(1, 2, 0, 3, 4).contiguous().view(-1, 3, patch_size, patch_size)
-            
+
             labels = label_board.view(-1)
-            
+
             return patches, labels
 
         except Exception as e:
-            print(f"Error loading index {idx}: {e}")
+            if isinstance(self.full_df, pd.DataFrame):
+                bad_row = self.full_df.iloc[idx]
+                print(f"\nCRITICAL DEBUG INFO:")
+                print(f"Index: {idx}")
+                print(f"Source CSV: {bad_row.get('source_csv', 'Unknown')}")  # זה יגלה את הסוד!
+                print(f"Frame ID: {bad_row.get('from_frame', 'Unknown')}")
+                print(f"Looking for file: {img_path}")
             return None
+
 
 # --- 3. Model Definition ---
 class PieceClassifier(nn.Module):
@@ -131,14 +143,12 @@ class PieceClassifier(nn.Module):
         x = self.fc(x)
         return x
 
+
 # --- 4. Main Training Function ---
 def main(args):
     # הגדרת Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Starting training on: {device}")
-
-    # Open debug file
-    debug_file = open("debug.txt", "w")
 
     # יצירת התיקייה לשמירת המודלים אם אינה קיימת
     os.makedirs(args.output_dir, exist_ok=True)
@@ -150,37 +160,42 @@ def main(args):
         return
 
     train_loader = DataLoader(
-        dataset, 
-        batch_size=args.batch_size, 
-        shuffle=True, 
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
         collate_fn=collate_fn_skip_none,
-        num_workers=4 # יעיל יותר בקלאסטר
+        num_workers=4  # יעיל יותר בקלאסטר
     )
 
     # Model, Loss, Optimizer
     model = PieceClassifier(num_classes=13).to(device)
-    criterion = nn.CrossEntropyLoss()
+
+    class_weights = torch.ones(13)
+
+    # low weight for empty class to reduce its influence relative to pieces
+    class_weights[0] = 0.1
+    class_weights = class_weights.to(device)
+
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     # Training Loop
-    id_to_piece = {0: 'empty', 1: 'P', 2: 'N', 3: 'B', 4: 'R', 5: 'Q', 6: 'K', 7: 'p', 8: 'n', 9: 'b', 10: 'r', 11: 'q', 12: 'k'}
     for epoch in range(args.epochs):
         model.train()
         running_loss = 0.0
         correct = 0
         total = 0
-        first_preds = None
-        first_targets = None
-        
-        loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
-        
+
+        loop = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}")
+
         for batch_data in loop:
             if batch_data is None:
                 continue
-            
+
             # Unpacking (התיקון החשוב)
             boards, labels = batch_data
-            
+
             # Reshape for training
             inputs = boards.view(-1, 3, 60, 60).to(device)
             targets = labels.view(-1).to(device)
@@ -194,55 +209,61 @@ def main(args):
             running_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
             total += targets.size(0)
-            really_correct_right_now = 0
-            for i in range(targets.size(0)):
-                if predicted[i] == targets[i]:
-                    really_correct_right_now += 1
-                else:
-                    print(f"Mismatch at index {i}: predicted {predicted[i].item()}, target {targets[i].item()}", file=debug_file)
-            correct_right_now = 0
-            correct_right_now = (predicted == targets).sum().item()
-            print(f"total: {targets.size(0)}, correct_right_now: {correct_right_now}, really_correct_right_now: {really_correct_right_now}")
             correct += (predicted == targets).sum().item()
-            
-            if first_preds is None and predicted.size(0) >= 5:
-                first_preds = predicted[:5].cpu().numpy()
-                first_targets = targets[:5].cpu().numpy()
-            
-            loop.set_postfix(loss=loss.item(), acc=100.*correct/total)
+
+            loop.set_postfix(loss=loss.item(), acc=100. * correct / total)
+
+            # נאסוף את כל התחזיות של האפוק האחרון
+    all_preds = []
+    all_targets = []
+
+    model.eval()  # חשוב! כדי לנטרל Dropout
+    with torch.no_grad():
+        for batch_data in train_loader:
+            if batch_data is None: continue
+            boards, labels = batch_data
+            inputs = boards.view(-1, 3, 60, 60).to(device)
+            targets = labels.view(-1).to(device)
+
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs.data, 1)
+
+            all_preds.extend(predicted.cpu().numpy())
+            all_targets.extend(targets.cpu().numpy())
+
+        # הדפסת דוח מפורט
+        # Target names: 0=Empty, 1=P, 2=N, etc... (לפי המילון שלך)
+        print("\nDetailed Report:")
+        print(classification_report(all_targets, all_preds, zero_division=0))
+
+        # הדפסת מטריצת בלבול (שורות=אמת, עמודות=חיזוי)
+        print("Confusion Matrix (Row=True, Col=Pred):")
+        print(confusion_matrix(all_targets, all_preds))
 
         # סוף אפוק - הדפסה ושמירה
         epoch_loss = running_loss / len(train_loader)
         epoch_acc = 100. * correct / total
-        print(f"Epoch {epoch+1} Summary: Loss={epoch_loss:.4f}, Accuracy={epoch_acc:.2f}%")
-        
-        if first_preds is not None and first_targets is not None:
-            print("First 5 predictions and targets:")
-            print(f"Epoch {epoch+1} First 5 predictions and targets:", file=debug_file)
-            for i in range(5):
-                pred_name = id_to_piece.get(first_preds[i], 'unknown')
-                target_name = id_to_piece.get(first_targets[i], 'unknown')
-                print(f"  Pred: {pred_name}, Target: {target_name}")
-                print(f"  Pred: {pred_name}, Target: {target_name}", file=debug_file)
-        
+        print(f"Epoch {epoch + 1} Summary: Loss={epoch_loss:.4f}, Accuracy={epoch_acc:.2f}%")
+
         # שמירת המודל בכל אפוק (או רק בסוף)
-        save_path = os.path.join(args.output_dir, f"model_epoch_{epoch+1}.pth")
+        save_path = os.path.join(args.output_dir, f"model_epoch_{epoch + 1}.pth")
         torch.save(model.state_dict(), save_path)
         print(f"Model saved to {save_path}")
 
-    debug_file.close()
+
+if __name__ == "__main__":
     # הגדרת הפרמטרים שהסקריפט יודע לקבל מבחוץ
     parser = argparse.ArgumentParser(description="Train Chess Piece Classifier")
-    
+
     # נתיבים
     parser.add_argument("--data_dir", type=str, required=True, help="Path to the labeled_data folder")
     parser.add_argument("--output_dir", type=str, default="./checkpoints", help="Where to save the model")
-    
+
     # היפר-פרמטרים
     parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size (number of boards)")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
 
     args = parser.parse_args()
-    
+
     main(args)
