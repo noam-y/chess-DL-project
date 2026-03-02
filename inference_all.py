@@ -75,7 +75,7 @@ def main():
     parser.add_argument("--model_file", type=str, required=True, help="Path to the python file implementing the model protocol (e.g., model_v3.py)")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to the .pth checkpoint file")
     parser.add_argument("--image_path", type=str, required=True, help="Path to the input image file")
-    parser.add_argument("--output_path", type=str, default=None, help="Path to save the result image. Defaults to 'result_<filename>' in the same directory.")
+    parser.add_argument("--output_path", type=str, default=None, help="Path to save the result image. Defaults to 'results_{model_name}/result_<filename>'")
     parser.add_argument("--ood_threshold", type=float, default=0.7, help="Confidence threshold for OOD detection")
     args = parser.parse_args()
 
@@ -154,10 +154,16 @@ def main():
         # Determine output path
         if args.output_path:
             out_path = args.output_path
+            # Ensure directory exists if user provided a full path
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
         else:
-            dir_name = os.path.dirname(args.image_path)
+            # Default: results_{model_name}/result_{filename}
+            model_name = os.path.splitext(os.path.basename(args.model_file))[0]
+            results_dir = f"results_{model_name}"
+            os.makedirs(results_dir, exist_ok=True)
+            
             base_name = os.path.basename(args.image_path)
-            out_path = os.path.join(dir_name, f"result_{base_name}")
+            out_path = os.path.join(results_dir, f"result_{base_name}")
 
         # Generate FEN Image
         temp_fen_path = "temp_fen_inference.png"
