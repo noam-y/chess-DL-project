@@ -31,29 +31,24 @@ class ModelV2(BaseChessModel):
         return SmartChessNetV2()
 
     def fen_to_labels(self, fen: str) -> tuple:
+        # For the new dataset, fen is a single character string (e.g., 'P', 'e', 'k')
+        # We need to return a single tensor with the class ID.
         piece_to_id = {
             'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6,
             'p': 7, 'n': 8, 'b': 9, 'r': 10, 'q': 11, 'k': 12
         }
-        board_tensor = np.zeros((8, 8), dtype=np.int64)
-        board_state = fen.split(' ')[0]
-        rows = board_state.split('/')
-        for r, row_str in enumerate(rows):
-            c = 0
-            for char in row_str:
-                if char.isdigit():
-                    c += int(char)
-                else:
-                    if char in piece_to_id:
-                        board_tensor[r, c] = piece_to_id[char]
-                    c += 1
-        return (torch.from_numpy(board_tensor),)
+        
+        # If fen is 'e' or not in map, it's empty (0)
+        label_id = piece_to_id.get(fen, 0)
+        return (torch.tensor(label_id, dtype=torch.long),)
 
     def compute_loss(self, model, batch, device, criterion=None):
-        # batch is (patches, labels)
-        boards, labels = batch
-        inputs = boards.view(-1, 3, 96, 96).to(device)
-        targets = labels.view(-1).to(device)
+        # batch is (images, labels)
+        # images: [batch_size, 3, 96, 96]
+        # labels: [batch_size]
+        images, labels = batch
+        inputs = images.to(device)
+        targets = labels.to(device)
         
         if criterion is None:
             class_weights = torch.ones(13).to(device)

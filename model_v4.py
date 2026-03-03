@@ -38,49 +38,30 @@ class ModelV4(BaseChessModel):
         return SmartChessNetV4()
 
     def fen_to_labels(self, fen: str) -> tuple:
-        # Logic adapted from train_kfold.py
-        piece_to_id = {'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6, 
-                       'p': 7, 'n': 8, 'b': 9, 'r': 10, 'q': 11, 'k': 12}
+        # fen is a single character string (e.g., 'P', 'e', 'k')
+        piece_to_id = {'p': 1, 'n': 2, 'b': 3, 'r': 4, 'q': 5, 'k': 6}
         
-        board_tensor = np.zeros((8, 8), dtype=np.int64)
-        board_state = fen.split(' ')[0]
-        rows = board_state.split('/')
-        for r, row_str in enumerate(rows):
-            c = 0
-            for char in row_str:
-                if char.isdigit():
-                    c += int(char)
-                else:
-                    if char in piece_to_id:
-                        board_tensor[r, c] = piece_to_id[char]
-                    c += 1
-        
-        labels_tensor = torch.from_numpy(board_tensor)
-        
-        # Generate the 3 targets: Occ, Color, Type
-        # Occ: 0=Empty, 1=Occupied
-        occ = (labels_tensor > 0).long()
-        
-        # Color: 0=Empty, 1=White, 2=Black
-        color = torch.zeros_like(labels_tensor)
-        color[(labels_tensor >= 1) & (labels_tensor <= 6)] = 1 
-        color[labels_tensor >= 7] = 2 
-        
-        # Type: 0=Empty, 1=P, 2=N, 3=B, 4=R, 5=Q, 6=K
-        piece_type = torch.zeros_like(labels_tensor)
-        mask = labels_tensor > 0
-        piece_type[mask] = ((labels_tensor[mask] - 1) % 6) + 1
-        
-        return occ, color, piece_type
+        if fen == 'e':
+            occ = 0
+            color = 0 # Empty color
+            piece_type = 0 # Empty type
+        else:
+            occ = 1
+            color = 1 if fen.isupper() else 2 # 1=White, 2=Black
+            piece_type = piece_to_id[fen.lower()]
+
+        return (torch.tensor(occ, dtype=torch.long), 
+                torch.tensor(color, dtype=torch.long), 
+                torch.tensor(piece_type, dtype=torch.long))
 
     def compute_loss(self, model, batch, device, criterion=None):
-        # batch is (patches, occ, color, type)
-        boards, t_occ, t_color, t_type = batch
+        # batch is (images, occ, color, type)
+        images, t_occ, t_color, t_type = batch
         
-        inputs = boards.view(-1, 3, 96, 96).to(device)
-        t_occ = t_occ.view(-1).to(device)
-        t_color = t_color.view(-1).to(device)
-        t_type = t_type.view(-1).to(device)
+        inputs = images.to(device)
+        t_occ = t_occ.to(device)
+        t_color = t_color.to(device)
+        t_type = t_type.to(device)
 
         p_occ, p_color, p_type = model(inputs)
         

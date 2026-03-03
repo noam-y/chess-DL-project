@@ -39,36 +39,32 @@ class ModelV3(BaseChessModel):
         return SmartChessNetV3()
 
     def fen_to_labels(self, fen: str) -> tuple:
+        # fen is a single character string (e.g., 'P', 'e', 'k')
         type_map = {'p': 0, 'n': 1, 'b': 2, 'r': 3, 'q': 4, 'k': 5}
         
-        occ_tensor = np.zeros((8, 8), dtype=np.int64)
-        color_tensor = np.zeros((8, 8), dtype=np.int64)
-        piece_tensor = np.zeros((8, 8), dtype=np.int64)
-        
-        board_state = fen.split(' ')[0]
-        rows = board_state.split('/')
-        
-        for r, row_str in enumerate(rows):
-            c = 0
-            for char in row_str:
-                if char.isdigit():
-                    c += int(char)
-                else:
-                    occ_tensor[r, c] = 1
-                    color_tensor[r, c] = 1 if char.isupper() else 0
-                    piece_tensor[r, c] = type_map[char.lower()]
-                    c += 1
-                    
-        return (torch.from_numpy(occ_tensor), torch.from_numpy(color_tensor), torch.from_numpy(piece_tensor))
+        if fen == 'e':
+            occ = 0
+            color = 0 # Dummy
+            piece = 0 # Dummy
+        else:
+            occ = 1
+            color = 1 if fen.isupper() else 0
+            piece = type_map[fen.lower()]
+            
+        return (torch.tensor(occ, dtype=torch.long), 
+                torch.tensor(color, dtype=torch.long), 
+                torch.tensor(piece, dtype=torch.long))
 
     def compute_loss(self, model, batch, device, criterion=None):
-        # batch is (patches, occ, color, piece)
-        boards, l_occ, l_color, l_piece = batch
+        # batch is (images, occ, color, piece)
+        # images: [batch_size, 3, 96, 96]
+        # labels: [batch_size]
+        images, t_occ, t_color, t_piece = batch
         
-        inputs = boards.view(-1, 3, 96, 96).to(device)
-        t_occ = l_occ.view(-1).to(device)
-        t_color = l_color.view(-1).to(device)
-        t_piece = l_piece.view(-1).to(device)
+        inputs = images.to(device)
+        t_occ = t_occ.to(device)
+        t_color = t_color.to(device)
+        t_piece = t_piece.to(device)
 
         out_occ, out_color, out_piece = model(inputs)
         

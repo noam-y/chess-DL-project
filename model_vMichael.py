@@ -53,36 +53,27 @@ class ModelV4(BaseChessModel):
         return ResNetMultiHeadV4()
 
     def fen_to_labels(self, fen: str) -> tuple:
-        """Converts FEN to 3 target tensors"""
+        """Converts SINGLE character (e.g., 'Q', 'p', 'e') to 3 target tensors"""
         type_map = {'p': 0, 'n': 1, 'b': 2, 'r': 3, 'q': 4, 'k': 5}
         
-        occ_tensor = np.zeros((8, 8), dtype=np.int64)
-        color_tensor = np.zeros((8, 8), dtype=np.int64)
-        piece_tensor = np.zeros((8, 8), dtype=np.int64)
+        if fen == 'e':
+            occ = torch.tensor(0, dtype=torch.long)
+            color = torch.tensor(0, dtype=torch.long) # Dummy value, ignored by loss mask
+            piece = torch.tensor(0, dtype=torch.long) # Dummy value, ignored by loss mask
+        else:
+            occ = torch.tensor(1, dtype=torch.long)
+            color = torch.tensor(1 if fen.isupper() else 0, dtype=torch.long)
+            piece = torch.tensor(type_map[fen.lower()], dtype=torch.long)
+            
+        return (occ, color, piece)
         
-        board_state = fen.split(' ')[0]
-        rows = board_state.split('/')
-        
-        for r, row_str in enumerate(rows):
-            c = 0
-            for char in row_str:
-                if char.isdigit():
-                    c += int(char)
-                else:
-                    occ_tensor[r, c] = 1
-                    color_tensor[r, c] = 1 if char.isupper() else 0
-                    piece_tensor[r, c] = type_map[char.lower()]
-                    c += 1
-                    
-        return (torch.from_numpy(occ_tensor), torch.from_numpy(color_tensor), torch.from_numpy(piece_tensor))
-
     def compute_loss(self, model, batch, device, criterion=None):
         boards, l_occ, l_color, l_piece = batch
         
-        inputs = boards.view(-1, 3, 96, 96).to(device)
-        t_occ = l_occ.view(-1).to(device)
-        t_color = l_color.view(-1).to(device)
-        t_piece = l_piece.view(-1).to(device)
+        inputs = boards.to(device)
+        t_occ = l_occ.to(device)
+        t_color = l_color.to(device)
+        t_piece = l_piece.to(device)
 
         out_occ, out_color, out_piece = model(inputs)
         
@@ -127,7 +118,7 @@ class ModelV4(BaseChessModel):
 
     def get_optimizer(self, model, lr=0.001):
         # We use a slightly smaller learning rate because we are fine-tuning a pre-trained model
-        return optim.Adam(filter(lambda p: p., model.parameters()), lr=lr, weight_decay=1e-4)
+        return optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=1e-4)
 
     def infer_tile(self, model, tile_tensor, device, threshold=0.7) -> Piece:
         """Inference routing returning the expected Enum"""
