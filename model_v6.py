@@ -14,9 +14,98 @@ PIECE_TO_ID = {
 }
 ID_TO_PIECE = {v: k for k, v in PIECE_TO_ID.items()}
 
-class ResNetTwoHead(nn.Module):
+class SupConLoss(nn.Module):
+    """Supervised Contrastive Learning: https://arxiv.org/pdf/2004.11362.pdf.
+    It also supports the unsupervised contrastive loss in SimCLR"""
+    def __init__(self, temperature=0.07, contrast_mode='all',
+                 base_temperature=0.07):
+        super(SupConLoss, self).__init__()
+        self.temperature = temperature
+        self.contrast_mode = contrast_mode
+        self.base_temperature = base_temperature
+
+    def forward(self, features, labels=None, mask=None):
+        """Compute loss for model. If both `labels` and `mask` are None,
+        it degenerates to SimCLR unsupervised loss:
+        https://arxiv.org/pdf/2002.05709.pdf
+
+        Args:
+            features: hidden vector of shape [bsz, n_views, ...].
+            labels: ground truth of shape [bsz].
+            mask: contrastive mask of shape [bsz, bsz], mask_{i,j}=1 if sample j
+                has the same class as sample i. Can be asymmetric.
+        Returns:
+            A loss scalar.
+        """
+        device = (torch.device('cuda')
+                  if features.is_cuda
+                  else torch.device('cpu'))
+
+        if len(features.shape) < 3:
+            raise ValueError('`features` needs to be [bsz, n_views, ...],'
+                             'at least 3 dimensions are required')
+        if len(features.shape) > 3:
+            features = features.view(features.shape[0], features.shape[1], -1)
+
+        batch_size = features.shape[0]
+        if labels is not None and mask is not None:
+            raise ValueError('Cannot define both `labels` and `mask`')
+        elif labels is None and mask is None:
+            mask = torch.eye(batch_size, dtype=torch.float32).to(device)
+        elif labels is not None:
+            labels = labels.contiguous().view(-1, 1)
+            if labels.shape[0] != batch_size:
+                raise ValueError('Num of labels does not match num of features')
+            mask = torch.eq(labels, labels.T).float().to(device)
+        else:
+            mask = mask.float().to(device)
+
+        contrast_count = features.shape[1]
+        contrast_feature = torch.cat(torch.unbind(features, dim=1), dim=0)
+        if self.contrast_mode == 'one':
+            anchor_feature = features[:, 0]
+            anchor_count = 1
+        elif self.contrast_mode == 'all':
+            anchor_feature = contrast_feature
+            anchor_count = contrast_count
+        else:
+            raise ValueError('Unknown mode: {}'.format(self.contrast_mode))
+
+        # compute logits
+        anchor_dot_contrast = torch.div(
+            torch.matmul(anchor_feature, contrast_feature.T),
+            self.temperature)
+        # for numerical stability
+        logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
+        logits = anchor_dot_contrast - logits_max.detach()
+
+        # tile mask
+        mask = mask.repeat(anchor_count, contrast_count)
+        # mask-out self-contrast cases
+        logits_mask = torch.scatter(
+            torch.ones_like(mask),
+            1,
+            torch.arange(batch_size * anchor_count).view(-1, 1).to(device),
+            0
+        )
+        mask = mask * logits_mask
+
+        # compute log_prob
+        exp_logits = torch.exp(logits) * logits_mask
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))
+
+        # compute mean of log-likelihood over positive
+        mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
+
+        # loss
+        loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
+        loss = loss.view(anchor_count, batch_size).mean()
+
+        return loss
+
+class ResNetTwoHeadWithSupCon(nn.Module):
     def __init__(self, freeze_backbone=False):
-        super(ResNetTwoHead, self).__init__()
+        super(ResNetTwoHeadWithSupCon, self).__init__()
         self.resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
         self.backbone = nn.Sequential(*list(self.resnet.children())[:-1])
         
@@ -30,15 +119,25 @@ class ResNetTwoHead(nn.Module):
         self.head_occ = nn.Linear(num_ftrs, 2)
         # Head 2: Piece Identity (12 classes)
         self.head_piece = nn.Linear(num_ftrs, 12)
+        
+        # Projection Head for SupCon
+        self.head_proj = nn.Sequential(
+            nn.Linear(num_ftrs, num_ftrs),
+            nn.ReLU(inplace=True),
+            nn.Linear(num_ftrs, 128)
+        )
 
     def forward(self, x):
         features = torch.flatten(self.backbone(x), 1)
-        return self.head_occ(features), self.head_piece(features)
+        out_occ = self.head_occ(features)
+        out_piece = self.head_piece(features)
+        out_proj = self.head_proj(features)
+        return out_occ, out_piece, out_proj
 
 class ModelV6(BaseChessModel):
     def create_model(self) -> nn.Module:
         # Start with the backbone frozen
-        return ResNetTwoHead(freeze_backbone=True)
+        return ResNetTwoHeadWithSupCon(freeze_backbone=True)
 
     def fen_to_labels(self, fen_char: str) -> tuple:
         """Returns (Occupancy Tensor, Piece Tensor)"""
@@ -54,26 +153,40 @@ class ModelV6(BaseChessModel):
         t_piece = t_piece.view(-1).to(device)
         inputs = boards.view(-1, 3, 96, 96).to(device)
 
-        out_occ, out_piece = model(inputs)
+        out_occ, out_piece, out_proj = model(inputs)
         
         # 1. Base Occupancy Loss
         criterion_occ = nn.CrossEntropyLoss()
         loss_occ = criterion_occ(out_occ, t_occ)
         
-        # 2. Conditional Piece Loss (Only calculate if square is occupied)
+        # 2. Conditional Piece Loss & SupCon Loss (Only calculate if square is occupied)
         mask = (t_occ == 1)
         loss_piece = torch.tensor(0.0, device=device)
-        if mask.sum() > 0:
+        loss_supcon = torch.tensor(0.0, device=device)
+        
+        if mask.sum() > 1: # Need at least 2 samples for contrastive loss
+            # Cross Entropy for Piece Classification
             criterion_piece = nn.CrossEntropyLoss()
             loss_piece = criterion_piece(out_piece[mask], t_piece[mask])
             
-        total_loss = loss_occ + loss_piece
+            # SupCon Loss
+            # SupCon expects features of shape [bsz, n_views, dim]. 
+            # Since we have 1 view per image, we unsqueeze dim 1.
+            features_supcon = out_proj[mask].unsqueeze(1)
+            labels_supcon = t_piece[mask]
+            
+            # Only compute SupCon if we have at least 2 classes in the batch to avoid NaN
+            if len(torch.unique(labels_supcon)) > 1:
+                criterion_supcon = SupConLoss(temperature=0.1)
+                loss_supcon = criterion_supcon(features_supcon, labels_supcon)
+            
+        total_loss = loss_occ + loss_piece + loss_supcon
         
         # 3. Create Unified Arrays for external F1-Score evaluation
         pred_occ = torch.argmax(out_occ, 1)
         pred_piece = torch.argmax(out_piece, 1)
         
-        # Map back to a 0-12 unified space (0=Empty, 1-12=Pieces) for the metric report
+        # Map back to 0-12 unified space
         unified_targets = torch.where(t_occ == 0, 0, t_piece + 1)
         unified_preds = torch.where(pred_occ == 0, 0, pred_piece + 1)
         correct = (unified_preds == unified_targets).sum().item()
@@ -82,7 +195,10 @@ class ModelV6(BaseChessModel):
             'correct': correct, 
             'total': t_occ.size(0),
             'preds': unified_preds.cpu().numpy(),
-            'targets': unified_targets.cpu().numpy()
+            'targets': unified_targets.cpu().numpy(),
+            'loss_occ': loss_occ.item(),
+            'loss_piece': loss_piece.item(),
+            'loss_supcon': loss_supcon.item()
         }
         
         return total_loss, metrics
@@ -96,7 +212,7 @@ class ModelV6(BaseChessModel):
         tile_tensor = tile_tensor.to(device).unsqueeze(0)
         
         with torch.no_grad():
-            out_occ, out_piece = model(tile_tensor)
+            out_occ, out_piece, _ = model(tile_tensor)
             
             # 1. Check Occupancy First
             prob_occ = F.softmax(out_occ, dim=1)
