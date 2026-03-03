@@ -17,26 +17,14 @@ ID_TO_PIECE = {v: k for k, v in PIECE_TO_ID.items()}
 class SupConLoss(nn.Module):
     """Supervised Contrastive Learning: https://arxiv.org/pdf/2004.11362.pdf.
     It also supports the unsupervised contrastive loss in SimCLR"""
-    def __init__(self, temperature=0.07, contrast_mode='all',
-                 base_temperature=0.07):
+    def __init__(self, temperature=0.1, contrast_mode='all',
+                 base_temperature=0.1):
         super(SupConLoss, self).__init__()
         self.temperature = temperature
         self.contrast_mode = contrast_mode
         self.base_temperature = base_temperature
 
     def forward(self, features, labels=None, mask=None):
-        """Compute loss for model. If both `labels` and `mask` are None,
-        it degenerates to SimCLR unsupervised loss:
-        https://arxiv.org/pdf/2002.05709.pdf
-
-        Args:
-            features: hidden vector of shape [bsz, n_views, ...].
-            labels: ground truth of shape [bsz].
-            mask: contrastive mask of shape [bsz, bsz], mask_{i,j}=1 if sample j
-                has the same class as sample i. Can be asymmetric.
-        Returns:
-            A loss scalar.
-        """
         device = (torch.device('cuda')
                   if features.is_cuda
                   else torch.device('cpu'))
@@ -75,12 +63,14 @@ class SupConLoss(nn.Module):
         anchor_dot_contrast = torch.div(
             torch.matmul(anchor_feature, contrast_feature.T),
             self.temperature)
+        
         # for numerical stability
         logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
         logits = anchor_dot_contrast - logits_max.detach()
 
         # tile mask
         mask = mask.repeat(anchor_count, contrast_count)
+        
         # mask-out self-contrast cases
         logits_mask = torch.scatter(
             torch.ones_like(mask),
@@ -92,14 +82,25 @@ class SupConLoss(nn.Module):
 
         # compute log_prob
         exp_logits = torch.exp(logits) * logits_mask
-        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))
+        # Prevent log(0) by adding epsilon
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-6)
 
         # compute mean of log-likelihood over positive
-        mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
+        # Avoid division by zero if there are no positives for an anchor
+        mask_sum = mask.sum(1)
+        mask_sum = torch.where(mask_sum == 0, torch.ones_like(mask_sum), mask_sum)
+        
+        mean_log_prob_pos = (mask * log_prob).sum(1) / mask_sum
 
         # loss
         loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
-        loss = loss.view(anchor_count, batch_size).mean()
+        
+        # Only average over anchors that actually had positives
+        valid_anchors = (mask.sum(1) > 0).float()
+        if valid_anchors.sum() > 0:
+            loss = (loss * valid_anchors).sum() / valid_anchors.sum()
+        else:
+            loss = torch.tensor(0.0, device=device, requires_grad=True)
 
         return loss
 
@@ -132,6 +133,10 @@ class ResNetTwoHeadWithSupCon(nn.Module):
         out_occ = self.head_occ(features)
         out_piece = self.head_piece(features)
         out_proj = self.head_proj(features)
+        
+        # Normalize projection features for cosine similarity
+        out_proj = F.normalize(out_proj, dim=1)
+        
         return out_occ, out_piece, out_proj
 
 class ModelV6(BaseChessModel):
@@ -170,13 +175,13 @@ class ModelV6(BaseChessModel):
             loss_piece = criterion_piece(out_piece[mask], t_piece[mask])
             
             # SupCon Loss
-            # SupCon expects features of shape [bsz, n_views, dim]. 
-            # Since we have 1 view per image, we unsqueeze dim 1.
             features_supcon = out_proj[mask].unsqueeze(1)
             labels_supcon = t_piece[mask]
             
-            # Only compute SupCon if we have at least 2 classes in the batch to avoid NaN
-            if len(torch.unique(labels_supcon)) > 1:
+            # Only compute SupCon if we have at least 2 classes in the batch
+            # AND if there is at least one class with more than 1 sample
+            unique_labels, counts = torch.unique(labels_supcon, return_counts=True)
+            if len(unique_labels) > 1 and (counts > 1).any():
                 criterion_supcon = SupConLoss(temperature=0.1)
                 loss_supcon = criterion_supcon(features_supcon, labels_supcon)
             
