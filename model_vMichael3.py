@@ -12,6 +12,7 @@ ID_TO_PIECE = {
     0: 'e', 1: 'P', 2: 'N', 3: 'B', 4: 'R', 5: 'Q', 6: 'K',
     7: 'p', 8: 'n', 9: 'b', 10: 'r', 11: 'q', 12: 'k'
 }
+# Invert the dictionary for lookup
 PIECE_TO_ID = {v: k for k, v in ID_TO_PIECE.items()}
 
 class ResNetUnified13(nn.Module):
@@ -36,22 +37,22 @@ class ModelUnified(BaseChessModel):
 
     def fen_to_labels(self, fen_char: str) -> tuple:
         """Converts a SINGLE character to a single target tensor ID"""
+        # fen_char is a string like 'P', 'e', 'k'
+        # We need to return a tuple containing one tensor
         class_id = PIECE_TO_ID.get(fen_char, 0) # Defaults to 0 ('e') if unknown
         return (torch.tensor(class_id, dtype=torch.long),)
         
     def compute_loss(self, model, batch, device, criterion=None):
-        # Batch now only contains the image and a single 13-class label
-        boards, labels_tuple = batch
+        # batch is (images, labels)
+        # images: [batch_size, 3, 96, 96]
+        # labels: [batch_size]
+        images, labels = batch
         
-        # Extract the single tensor from the tuple returned by the dataset
-        labels = labels_tuple[0] 
-        
-        inputs = boards.view(-1, 3, 96, 96).to(device)
-        targets = labels.view(-1).to(device)
+        inputs = images.to(device)
+        targets = labels.to(device)
 
         outputs = model(inputs)
         
-        # Uniform weights - the Sampler in train_all handles the imbalance!
         if criterion is None:
             criterion = nn.CrossEntropyLoss()
             
@@ -76,11 +77,12 @@ class ModelUnified(BaseChessModel):
             conf, pred = torch.max(probs, 1)
             
             class_id = pred.item()
-            char = ID_TO_PIECE[class_id]
             
             # Simple OOD Logic: If confidence is below threshold, return OOD
             if conf.item() < threshold:
                 return Piece.OOD
+            
+            char = ID_TO_PIECE.get(class_id, 'e')
             
             if char == 'e':
                 return Piece.EMPTY
