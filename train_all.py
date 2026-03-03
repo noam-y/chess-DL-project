@@ -198,6 +198,9 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    if device.type == 'cuda':
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+
     os.makedirs(args.output_dir, exist_ok=True)
 
     model_protocol = load_model_module(args.model_file)
