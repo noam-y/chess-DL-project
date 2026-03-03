@@ -3,7 +3,7 @@ import argparse
 import numpy as np
 import torch
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 import importlib.util
 import sys
@@ -12,6 +12,8 @@ import pandas as pd
 from torchvision import transforms
 from PIL import Image
 import inspect
+from collections import Counter 
+
 
 def load_model_module(model_file_path):
     spec = importlib.util.spec_from_file_location("model_module", model_file_path)
@@ -76,7 +78,6 @@ def train_one_fold(model_protocol, args, val_game, device):
     
     print(f"Train samples: {len(train_ds)} | Val samples: {len(val_ds)}")
 
-    # Use default_collate if get_collate_fn is not available or returns None
     try:
         collate_fn = model_protocol.get_collate_fn()
     except AttributeError:
@@ -86,10 +87,45 @@ def train_one_fold(model_protocol, args, val_game, device):
             if len(batch) == 0: return None
             return default_collate(batch)
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=4)
+    # ========================================================
+    # Dynamic String-Based Weighted Random Sampler
+    # ========================================================
+    if hasattr(train_ds, 'all_labels'):
+        labels = train_ds.all_labels
+        
+        # Counter automatically creates a dictionary of frequencies: e.g., {'e': 10000, 'Q': 20}
+        class_counts = Counter(labels)
+        
+        # Create a weight list by looking up the frequency of each image's label
+        # and taking the inverse (1 / count).
+        sample_weights = [1.0 / class_counts[label] for label in labels]
+        
+        # Convert to a PyTorch tensor
+        sample_weights_tensor = torch.tensor(sample_weights, dtype=torch.float)
+        
+        sampler = WeightedRandomSampler(
+            weights=sample_weights_tensor, 
+            num_samples=len(sample_weights_tensor), 
+            replacement=True
+        )
+        
+        train_loader = DataLoader(
+            train_ds, 
+            batch_size=args.batch_size, 
+            sampler=sampler,
+            collate_fn=collate_fn, 
+            num_workers=4
+        )
+        print(f"Dynamic WeightedRandomSampler initialized. Found {len(class_counts)} unique piece classes.")
+    else:
+        print("Warning: 'all_labels' not found in Dataset. Using standard shuffling.")
+        train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=4)
+    
+    # In Validation, we don't need a Sampler; we want to measure on the real, unbalanced distribution
     val_loader = DataLoader(val_ds, batch_size=args.batch_size*2, shuffle=False, collate_fn=collate_fn, num_workers=4)
-
+    
     model = model_protocol.create_model().to(device)
+
     optimizer = model_protocol.get_optimizer(model, lr=args.lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2)
 
