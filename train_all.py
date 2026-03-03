@@ -162,6 +162,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--single_fold", type=str, default=None, help="Train only on a specific game fold (e.g., 'game5')")
     args = parser.parse_args()
 
     if args.output_dir is None:
@@ -176,6 +177,15 @@ def main():
     all_games = find_games(args.data_dir)
 
     if not all_games: return
+
+    # Filter games if single_fold argument is provided
+    if args.single_fold:
+        if args.single_fold in all_games:
+            print(f"Single fold mode enabled. Training only on fold: {args.single_fold}")
+            all_games = [args.single_fold]
+        else:
+            print(f"Warning: Specified fold '{args.single_fold}' not found in available games: {all_games}")
+            return
 
     results = {}
     for game in all_games:
