@@ -240,41 +240,32 @@ class ModelV6(BaseChessModel):
 
     def on_epoch_end(self, model, epoch, optimizer):
         """
-        Unfreeze layers progressively based on the epoch number.
+        Unfreeze one backbone layer every 10 epochs, starting from the last layer.
         Epochs are 0-indexed.
         """
-        # The backbone has 9 children: [conv1, bn1, relu, maxpool, layer1, layer2, layer3, layer4, avgpool]
         children = list(model.backbone.children())
-        
-        layers_to_unfreeze = []
-        
-        # After 10 epochs (at the end of epoch index 9)
-        if epoch == 9:
-            print("\n[Epoch 10] Unfreezing last 2 layers of backbone (layer4, avgpool)...")
-            layers_to_unfreeze = children[-2:]
-            
-        # After 20 epochs (at the end of epoch index 19)
-        elif epoch == 19:
-            print("\n[Epoch 20] Unfreezing 2 more layers (layer2, layer3)...")
-            layers_to_unfreeze = children[-4:-2]
+        num_backbone_layers = len(children)
 
-        # After 30 epochs (at the end of epoch index 29)
-        elif epoch == 29:
-            print("\n[Epoch 30] Unfreezing all remaining backbone layers...")
-            layers_to_unfreeze = children[:-4]
+        # Check if it's an unfreezing epoch (e.g., end of epoch 9, 19, 29, ...)
+        if (epoch + 1) % 10 == 0:
+            # Calculate how many layers should be unfrozen in total by now
+            layers_to_unfreeze_count = (epoch + 1) // 10
 
-        if not layers_to_unfreeze:
-            return
+            if 1 <= layers_to_unfreeze_count <= num_backbone_layers:
+                # Get the specific layer to unfreeze in this step. We work backwards from the end.
+                layer_index_to_unfreeze = -layers_to_unfreeze_count
+                layer_to_unfreeze = children[layer_index_to_unfreeze]
 
-        # Unfreeze and collect new parameters
-        new_params = []
-        for layer in layers_to_unfreeze:
-            for param in layer.parameters():
-                if not param.requires_grad:
-                    param.requires_grad = True
-                    new_params.append(param)
-        
-        # Add newly unfrozen parameters to the optimizer
-        if new_params:
-            optimizer.add_param_group({'params': new_params})
-            print(f"Added {len(new_params)} parameters to the optimizer.")
+                print(f"\n[Epoch {epoch + 1}] Unfreezing backbone layer {layers_to_unfreeze_count}/{num_backbone_layers} (layer index {layer_index_to_unfreeze})...")
+
+                # Unfreeze and collect new parameters
+                new_params = []
+                for param in layer_to_unfreeze.parameters():
+                    if not param.requires_grad:
+                        param.requires_grad = True
+                        new_params.append(param)
+
+                # Add newly unfrozen parameters to the optimizer
+                if new_params:
+                    optimizer.add_param_group({'params': new_params})
+                    print(f"Added {len(new_params)} parameters from layer '{type(layer_to_unfreeze).__name__}' to the optimizer.")
