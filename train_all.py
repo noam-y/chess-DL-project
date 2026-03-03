@@ -69,14 +69,14 @@ def train_one_fold(model_protocol, args, val_game, device):
             return default_collate(batch)
 
     # ========================================================
-    # Dynamic String-Based Weighted Random Sampler
+    # Sampler Configuration
     # ========================================================
-    if hasattr(train_ds, 'all_labels') and len(train_ds.all_labels) > 0:
+    if args.sampler == 'weighted' and hasattr(train_ds, 'all_labels') and len(train_ds.all_labels) > 0:
         labels = train_ds.all_labels
         class_counts = Counter(labels)
         
         print("\nClass distribution in Training Set:")
-        for k, v in class_counts.items():
+        for k, v in sorted(class_counts.items()):
             print(f"  {k}: {v} samples")
             
         sample_weights = [1.0 / class_counts[label] for label in labels]
@@ -94,7 +94,10 @@ def train_one_fold(model_protocol, args, val_game, device):
         )
         print(f"WeightedRandomSampler initialized. Found {len(class_counts)} unique classes.")
     else:
-        print("Warning: 'all_labels' not found. Using standard shuffling.")
+        if args.sampler == 'weighted':
+            print("Warning: 'all_labels' not found in dataset. Falling back to standard shuffling.")
+        else:
+            print("Using standard shuffling (no sampler).")
         train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=4)
     
     val_loader = DataLoader(val_ds, batch_size=args.batch_size*2, shuffle=False, collate_fn=collate_fn, num_workers=4)
@@ -153,9 +156,11 @@ def main():
     parser.add_argument("--data_dir", type=str, required=True)
     parser.add_argument("--model_file", type=str, required=True)
     parser.add_argument("--output_dir", type=str, default=None)
-    parser.add_argument("--epochs", type=int, default=10) # Bumped up to 10 for fine-tuning
-    parser.add_argument("--batch_size", type=int, default=32) # Standard ResNet batch size
-    parser.add_argument("--lr", type=float, default=0.0001) # Lowered to prevent catastrophic forgetting
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--sampler", type=str, default="weighted", choices=["weighted", "none"],
+                        help="Sampler to use for training data ('weighted' or 'none').")
     args = parser.parse_args()
 
     if args.output_dir is None:
