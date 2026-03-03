@@ -149,3 +149,90 @@ class ModelV6Triplet(BaseChessModel):
             
             char = ID_TO_PIECE[p_piece.item()]
             return Piece(char)
+
+    def on_epoch_end(self, model, epoch, optimizer):
+        """
+        Unfreeze layers progressively.
+        Epochs are 0-indexed.
+        """
+        # After epoch 2 (i.e. starting epoch 3), unfreeze the last 3 layers of the backbone
+        if epoch == 2:
+            print("Unfreezing last 3 layers of backbone...")
+            # ResNet backbone is a Sequential model.
+            # We can access children. The last few children are the residual blocks.
+            # Let's unfreeze the last 3 children of the backbone.
+            # Note: The backbone in ResNetTwoHeadWithTriplet is defined as:
+            # self.backbone = nn.Sequential(*list(self.resnet.children())[:-1])
+            
+            # Let's see how many children there are.
+            children = list(model.backbone.children())
+            # Typically ResNet18 has:
+            # 0: Conv1
+            # 1: BN
+            # 2: ReLU
+            # 3: MaxPool
+            # 4: Layer1 (BasicBlock)
+            # 5: Layer2 (BasicBlock)
+            # 6: Layer3 (BasicBlock)
+            # 7: Layer4 (BasicBlock)
+            # Total 8 children in the backbone (since fc and avgpool are removed or avgpool is last?)
+            # Actually, `list(self.resnet.children())[:-1]` removes the FC layer.
+            # The standard ResNet children are: conv1, bn1, relu, maxpool, layer1, layer2, layer3, layer4, avgpool, fc.
+            # So `[:-1]` removes `fc`. `avgpool` is at index -1 of the backbone.
+            
+            # We want to unfreeze the last 3 layers: avgpool, layer4, layer3.
+            
+            layers_to_unfreeze = children[-3:]
+            for layer in layers_to_unfreeze:
+                for param in layer.parameters():
+                    param.requires_grad = True
+            
+            # Update optimizer to include these new parameters
+            # We need to add the newly unfrozen parameters to the optimizer
+            # The easiest way is to re-initialize the optimizer or add param groups.
+            # However, `train_all.py` doesn't re-fetch the optimizer.
+            # We can manually add the parameters to the optimizer.
+            
+            new_params = []
+            for layer in layers_to_unfreeze:
+                new_params.extend([p for p in layer.parameters() if p.requires_grad])
+            
+            # Filter out params that are already in the optimizer
+            existing_params = set()
+            for group in optimizer.param_groups:
+                for p in group['params']:
+                    existing_params.add(p)
+            
+            params_to_add = [p for p in new_params if p not in existing_params]
+            
+            if params_to_add:
+                optimizer.add_param_group({'params': params_to_add})
+                print(f"Added {len(params_to_add)} parameters to optimizer.")
+
+        # After epoch 5 (i.e. starting epoch 6), unfreeze more layers (e.g., layer2, layer1)
+        if epoch == 5:
+            print("Unfreezing more layers (layer1, layer2)...")
+            children = list(model.backbone.children())
+            # Unfreeze layer1 and layer2 (indices 4 and 5 typically, or -5 and -4)
+            # Let's just unfreeze everything from index 4 onwards (layer1..avgpool)
+            # children[-5:-3] would be layer1 and layer2
+            
+            layers_to_unfreeze = children[-5:-3]
+            for layer in layers_to_unfreeze:
+                for param in layer.parameters():
+                    param.requires_grad = True
+            
+            new_params = []
+            for layer in layers_to_unfreeze:
+                new_params.extend([p for p in layer.parameters() if p.requires_grad])
+            
+            existing_params = set()
+            for group in optimizer.param_groups:
+                for p in group['params']:
+                    existing_params.add(p)
+            
+            params_to_add = [p for p in new_params if p not in existing_params]
+            
+            if params_to_add:
+                optimizer.add_param_group({'params': params_to_add})
+                print(f"Added {len(params_to_add)} parameters to optimizer.")
