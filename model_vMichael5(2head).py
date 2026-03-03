@@ -43,9 +43,9 @@ class ModelTwoHead(BaseChessModel):
             return (torch.tensor(1, dtype=torch.long), torch.tensor(piece_id, dtype=torch.long))
         
     def compute_loss(self, model, batch, device, criterion=None):
-        boards, labels_tuple = batch
-        t_occ = labels_tuple[0].view(-1).to(device)
-        t_piece = labels_tuple[1].view(-1).to(device)
+        boards, t_occ, t_piece = batch
+        t_occ = t_occ.view(-1).to(device)
+        t_piece = t_piece.view(-1).to(device)
         inputs = boards.view(-1, 3, 96, 96).to(device)
 
         out_occ, out_piece = model(inputs)
