@@ -8,12 +8,8 @@ from tqdm import tqdm
 import importlib.util
 import sys
 import glob
-import pandas as pd
-from torchvision import transforms
-from PIL import Image
 import inspect
-from collections import Counter 
-
+from collections import Counter
 
 def load_model_module(model_file_path):
     spec = importlib.util.spec_from_file_location("model_module", model_file_path)
@@ -21,49 +17,30 @@ def load_model_module(model_file_path):
     sys.modules["model_module"] = module
     spec.loader.exec_module(module)
     
-    # Find the class that implements ChessModelProtocol
-    # We need to find a class that inherits from BaseChessModel (or ChessModelProtocol)
-    # AND is NOT BaseChessModel itself (which is abstract).
-    
     found_class = None
     for name, obj in module.__dict__.items():
         if isinstance(obj, type):
-            # Check if it inherits from ChessModelProtocol (directly or indirectly)
             bases = [b.__name__ for b in obj.__mro__]
             if "ChessModelProtocol" in bases:
-                # Skip the abstract base classes themselves
                 if name in ["ChessModelProtocol", "BaseChessModel"]:
                     continue
-                
-                # CRITICAL FIX: Only pick classes defined IN THIS MODULE
-                # This prevents picking up BaseChessModel which is imported
                 if obj.__module__ != "model_module":
                     continue
-                
-                # Ensure it's not abstract
                 if inspect.isabstract(obj):
                     continue
-
                 found_class = obj
                 break
     
     if found_class:
         return found_class()
     else:
-        # Fallback: print what was found to help debug
-        print(f"Debug: Classes found in {model_file_path}:")
-        for name, obj in module.__dict__.items():
-            if isinstance(obj, type):
-                print(f" - {name} (Module: {obj.__module__})")
-        raise ValueError("No concrete class implementing ChessModelProtocol found in the provided file.")
+        raise ValueError("No concrete class implementing ChessModelProtocol found.")
 
 def find_games(root_dir):
     abs_root = os.path.abspath(root_dir)
-    # Look for directories that contain a gt.csv file
     csv_files = glob.glob(os.path.join(abs_root, '**', 'gt.csv'), recursive=True)
     found_games = set()
     for csv_path in csv_files:
-        # The game name is the name of the directory containing the gt.csv
         game_dir = os.path.dirname(csv_path)
         game_name = os.path.basename(game_dir)
         found_games.add(game_name)
@@ -80,7 +57,6 @@ def train_one_fold(model_protocol, args, val_game, device):
     print(f"Train samples: {len(train_ds)} | Val samples: {len(val_ds)}")
 
     if len(train_ds) == 0:
-        print("Error: No training samples found. Skipping this fold.")
         return 0.0
 
     try:
@@ -97,15 +73,13 @@ def train_one_fold(model_protocol, args, val_game, device):
     # ========================================================
     if hasattr(train_ds, 'all_labels') and len(train_ds.all_labels) > 0:
         labels = train_ds.all_labels
-        
-        # Counter automatically creates a dictionary of frequencies: e.g., {'e': 10000, 'Q': 20}
         class_counts = Counter(labels)
         
-        # Create a weight list by looking up the frequency of each image's label
-        # and taking the inverse (1 / count).
+        print("\nClass distribution in Training Set:")
+        for k, v in class_counts.items():
+            print(f"  {k}: {v} samples")
+            
         sample_weights = [1.0 / class_counts[label] for label in labels]
-        
-        # Convert to a PyTorch tensor
         sample_weights_tensor = torch.tensor(sample_weights, dtype=torch.float)
         
         sampler = WeightedRandomSampler(
@@ -115,29 +89,23 @@ def train_one_fold(model_protocol, args, val_game, device):
         )
         
         train_loader = DataLoader(
-            train_ds, 
-            batch_size=args.batch_size, 
-            sampler=sampler,
-            collate_fn=collate_fn, 
-            num_workers=4
+            train_ds, batch_size=args.batch_size, sampler=sampler,
+            collate_fn=collate_fn, num_workers=4
         )
-        print(f"Dynamic WeightedRandomSampler initialized. Found {len(class_counts)} unique piece classes.")
+        print(f"WeightedRandomSampler initialized. Found {len(class_counts)} unique classes.")
     else:
-        print("Warning: 'all_labels' not found or empty in Dataset. Using standard shuffling.")
+        print("Warning: 'all_labels' not found. Using standard shuffling.")
         train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=4)
     
-    # In Validation, we don't need a Sampler; we want to measure on the real, unbalanced distribution
     val_loader = DataLoader(val_ds, batch_size=args.batch_size*2, shuffle=False, collate_fn=collate_fn, num_workers=4)
     
     model = model_protocol.create_model().to(device)
-
     optimizer = model_protocol.get_optimizer(model, lr=args.lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2)
 
     best_fold_acc = 0.0
 
     for epoch in range(args.epochs):
-        # --- TRAIN ---
         model.train()
         running_loss = 0.0
         train_correct = 0
@@ -155,7 +123,6 @@ def train_one_fold(model_protocol, args, val_game, device):
             train_correct += metrics['correct']
             train_total += metrics['total']
 
-        # --- VALIDATION ---
         model.eval()
         val_correct = 0
         val_total = 0
@@ -184,14 +151,13 @@ def train_one_fold(model_protocol, args, val_game, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--model_file", type=str, required=True, help="Path to the python file implementing the model protocol")
-    parser.add_argument("--output_dir", type=str, default=None, help="Directory to save checkpoints. Defaults to ./checkpoints_{model_name}")
-    parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--model_file", type=str, required=True)
+    parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--epochs", type=int, default=10) # Bumped up to 10 for fine-tuning
+    parser.add_argument("--batch_size", type=int, default=32) # Standard ResNet batch size
+    parser.add_argument("--lr", type=float, default=0.0001) # Lowered to prevent catastrophic forgetting
     args = parser.parse_args()
 
-    # Set default output_dir based on model_file name if not provided
     if args.output_dir is None:
         model_name = os.path.splitext(os.path.basename(args.model_file))[0]
         args.output_dir = f"./checkpoints_{model_name}"
@@ -204,36 +170,18 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     model_protocol = load_model_module(args.model_file)
-    
-    # Use the generic find_games function instead of the protocol method
     all_games = find_games(args.data_dir)
     
     if not all_games:
-        print("Warning: Auto-detection of games failed or no games found.")
         return
 
-    print(f"Found games for Cross-Validation: {all_games}")
-    
     results = {}
-    
     for game in all_games:
         acc = train_one_fold(model_protocol, args, game, device)
         results[game] = acc
     
-    print("\n" + "="*40)
-    print("FINAL K-FOLD RESULTS")
-    print("="*40)
-    accuracies = []
-    for game, acc in results.items():
-        print(f"Hold-out {game}: {acc:.2f}%")
-        accuracies.append(acc)
-    
-    mean_acc = np.mean(accuracies)
-    std_acc = np.std(accuracies)
-    
-    print("-" * 40)
-    print(f"Average Accuracy: {mean_acc:.2f}% ± {std_acc:.2f}%")
-    print("="*40)
+    accuracies = list(results.values())
+    print(f"\nFinal K-Fold Mean Acc: {np.mean(accuracies):.2f}% ± {np.std(accuracies):.2f}%")
 
 if __name__ == "__main__":
     main()
