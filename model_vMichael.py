@@ -127,7 +127,7 @@ class ModelV4(BaseChessModel):
 
     def get_optimizer(self, model, lr=0.001):
         # We use a slightly smaller learning rate because we are fine-tuning a pre-trained model
-        return optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=1e-4)
+        return optim.Adam(filter(lambda p: p., model.parameters()), lr=lr, weight_decay=1e-4)
 
     def infer_tile(self, model, tile_tensor, device, threshold=0.7) -> Piece:
         """Inference routing returning the expected Enum"""
