@@ -108,6 +108,19 @@ def train_one_fold(model_protocol, args, val_game, device):
 
     best_fold_acc = 0.0
 
+    # Initial validation before training
+    model.eval()
+    val_correct = 0
+    val_total = 0
+    with torch.no_grad():
+        for batch in val_loader:
+            if batch is None: continue
+            _, metrics = model_protocol.compute_loss(model, batch, device)
+            val_correct += metrics['correct']
+            val_total += metrics['total']
+    val_acc = 100 * val_correct / val_total if val_total > 0 else 0
+    print(f"Epoch 0: Val Acc ({val_game})={val_acc:.1f}%")
+
     for epoch in range(args.epochs):
         model.train()
         running_loss = 0.0
