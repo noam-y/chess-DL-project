@@ -3,13 +3,14 @@ import argparse
 import numpy as np
 import torch
 import torch.optim as optim
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, WeightedRandomSampler, Subset
 from tqdm import tqdm
 import importlib.util
 import sys
 import glob
 import inspect
-from collections import Counter
+from collections import Counter, defaultdict
+import random
 
 def load_model_module(model_file_path):
     spec = importlib.util.spec_from_file_location("model_module", model_file_path)
@@ -45,6 +46,152 @@ def find_games(root_dir):
         game_name = os.path.basename(game_dir)
         found_games.add(game_name)
     return sorted(list(found_games))
+
+def train_no_kfold(model_protocol, args, device):
+    print(f"\n{'='*40}")
+    print(f"STARTING TRAINING (NO K-FOLD)")
+    print(f"{'='*40}")
+
+    # Load full dataset twice (one for train transforms, one for val transforms)
+    full_train_ds = model_protocol.create_dataset(args.data_dir, mode='train', val_game_name=None)
+    full_val_ds = model_protocol.create_dataset(args.data_dir, mode='val', val_game_name=None)
+
+    if len(full_train_ds) == 0:
+        print("No data found!")
+        return 0.0
+
+    # Stratified Split (85/15)
+    labels = full_train_ds.all_labels
+    
+    class_indices = defaultdict(list)
+    for idx, label in enumerate(labels):
+        class_indices[label].append(idx)
+        
+    train_indices = []
+    val_indices = []
+    
+    for label, idxs in class_indices.items():
+        random.shuffle(idxs)
+        split_point = int(len(idxs) * 0.85)
+        train_indices.extend(idxs[:split_point])
+        val_indices.extend(idxs[split_point:])
+        
+    # Shuffle indices to mix classes in batches
+    random.shuffle(train_indices)
+    random.shuffle(val_indices)
+    
+    train_ds = Subset(full_train_ds, train_indices)
+    val_ds = Subset(full_val_ds, val_indices)
+    
+    # Need to attach all_labels to train_ds for WeightedRandomSampler if needed
+    train_labels = [labels[i] for i in train_indices]
+    train_ds.all_labels = train_labels
+
+    print(f"Train samples: {len(train_ds)} | Val samples: {len(val_ds)}")
+
+    try:
+        collate_fn = model_protocol.get_collate_fn()
+    except AttributeError:
+        from torch.utils.data import default_collate
+        def collate_fn(batch):
+            batch = [item for item in batch if item is not None]
+            if len(batch) == 0: return None
+            return default_collate(batch)
+
+    # ========================================================
+    # Sampler Configuration
+    # ========================================================
+    if args.sampler == 'weighted' and len(train_labels) > 0:
+        class_counts = Counter(train_labels)
+        
+        print("\nClass distribution in Training Set:")
+        for k, v in sorted(class_counts.items()):
+            print(f"  {k}: {v} samples")
+            
+        sample_weights = [1.0 / class_counts[label] for label in train_labels]
+        sample_weights_tensor = torch.tensor(sample_weights, dtype=torch.float)
+        
+        sampler = WeightedRandomSampler(
+            weights=sample_weights_tensor, 
+            num_samples=len(sample_weights_tensor), 
+            replacement=True
+        )
+        
+        train_loader = DataLoader(
+            train_ds, batch_size=args.batch_size, sampler=sampler,
+            collate_fn=collate_fn, num_workers=4
+        )
+        print(f"WeightedRandomSampler initialized. Found {len(class_counts)} unique classes.")
+    else:
+        if args.sampler == 'weighted':
+            print("Warning: 'all_labels' not found or empty. Falling back to standard shuffling.")
+        else:
+            print("Using standard shuffling (no sampler).")
+        train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=4)
+    
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size*2, shuffle=False, collate_fn=collate_fn, num_workers=4)
+    
+    model = model_protocol.create_model().to(device)
+    optimizer = model_protocol.get_optimizer(model, lr=args.lr)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2)
+
+    best_val_acc = 0.0
+
+    # Initial validation before training
+    model.eval()
+    val_correct = 0
+    val_total = 0
+    with torch.no_grad():
+        for batch in val_loader:
+            if batch is None: continue
+            _, metrics = model_protocol.compute_loss(model, batch, device)
+            val_correct += metrics['correct']
+            val_total += metrics['total']
+    val_acc = 100 * val_correct / val_total if val_total > 0 else 0
+    print(f"Epoch 0: Val Acc={val_acc:.1f}%")
+
+    for epoch in range(args.epochs):
+        model.train()
+        running_loss = 0.0
+        train_correct = 0
+        train_total = 0
+        
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}", leave=False):
+            if batch is None: continue
+            
+            optimizer.zero_grad()
+            loss, metrics = model_protocol.compute_loss(model, batch, device)
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item()
+            train_correct += metrics['correct']
+            train_total += metrics['total']
+
+        model.eval()
+        val_correct = 0
+        val_total = 0
+        with torch.no_grad():
+            for batch in val_loader:
+                if batch is None: continue
+                _, metrics = model_protocol.compute_loss(model, batch, device)
+                val_correct += metrics['correct']
+                val_total += metrics['total']
+        
+        epoch_loss = running_loss / len(train_loader) if len(train_loader) > 0 else 0
+        train_acc = 100 * train_correct / train_total if train_total > 0 else 0
+        val_acc = 100 * val_correct / val_total if val_total > 0 else 0
+        
+        scheduler.step(epoch_loss)
+        
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), os.path.join(args.output_dir, f"best_model_no_kfold.pth"))
+
+        print(f"Epoch {epoch+1}: Loss={epoch_loss:.3f}, Train Acc={train_acc:.1f}%, Val Acc={val_acc:.1f}%")
+
+    print(f"Finished Training. Best Val Acc: {best_val_acc:.2f}%")
+    return best_val_acc
 
 def train_one_fold(model_protocol, args, val_game, device):
     print(f"\n{'='*40}")
@@ -174,6 +321,7 @@ def main():
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--sampler", type=str, default="weighted", choices=["weighted", "none"],
                         help="Sampler to use for training data ('weighted' or 'none').")
+    parser.add_argument("--no_kfold", action="store_true", help="Disable K-Fold and use a single 85/15 stratified split.")
     args = parser.parse_args()
 
     if args.output_dir is None:
@@ -188,6 +336,11 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     model_protocol = load_model_module(args.model_file)
+    
+    if args.no_kfold:
+        train_no_kfold(model_protocol, args, device)
+        return
+
     all_games = find_games(args.data_dir)
     
     if not all_games:

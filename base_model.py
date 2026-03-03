@@ -23,11 +23,12 @@ class BaseChessDataset(Dataset):
             current_game = os.path.basename(game_folder)
             
             # K-fold cross-validation split logic
-            is_val_target = (current_game == val_game_name)
-            if mode == 'train' and is_val_target: 
-                continue
-            elif mode == 'val' and not is_val_target: 
-                continue
+            if val_game_name is not None:
+                is_val_target = (current_game == val_game_name)
+                if mode == 'train' and is_val_target: 
+                    continue
+                elif mode == 'val' and not is_val_target: 
+                    continue
         
             try:
                 df = pd.read_csv(csv_path)
