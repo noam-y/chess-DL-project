@@ -59,13 +59,14 @@ def load_model_module(model_file_path):
 
 def find_games(root_dir):
     abs_root = os.path.abspath(root_dir)
-    csv_files = glob.glob(os.path.join(abs_root, '**', '*.csv'), recursive=True)
+    # Look for directories that contain a gt.csv file
+    csv_files = glob.glob(os.path.join(abs_root, '**', 'gt.csv'), recursive=True)
     found_games = set()
     for csv_path in csv_files:
-        path_parts = csv_path.split(os.sep)
-        current_game = next((part for part in path_parts if 'game' in part.lower()), None)
-        if current_game:
-            found_games.add(current_game)
+        # The game name is the name of the directory containing the gt.csv
+        game_dir = os.path.dirname(csv_path)
+        game_name = os.path.basename(game_dir)
+        found_games.add(game_name)
     return sorted(list(found_games))
 
 def train_one_fold(model_protocol, args, val_game, device):
@@ -77,6 +78,10 @@ def train_one_fold(model_protocol, args, val_game, device):
     val_ds = model_protocol.create_dataset(args.data_dir, mode='val', val_game_name=val_game)
     
     print(f"Train samples: {len(train_ds)} | Val samples: {len(val_ds)}")
+
+    if len(train_ds) == 0:
+        print("Error: No training samples found. Skipping this fold.")
+        return 0.0
 
     try:
         collate_fn = model_protocol.get_collate_fn()
@@ -90,7 +95,7 @@ def train_one_fold(model_protocol, args, val_game, device):
     # ========================================================
     # Dynamic String-Based Weighted Random Sampler
     # ========================================================
-    if hasattr(train_ds, 'all_labels'):
+    if hasattr(train_ds, 'all_labels') and len(train_ds.all_labels) > 0:
         labels = train_ds.all_labels
         
         # Counter automatically creates a dictionary of frequencies: e.g., {'e': 10000, 'Q': 20}
@@ -118,7 +123,7 @@ def train_one_fold(model_protocol, args, val_game, device):
         )
         print(f"Dynamic WeightedRandomSampler initialized. Found {len(class_counts)} unique piece classes.")
     else:
-        print("Warning: 'all_labels' not found in Dataset. Using standard shuffling.")
+        print("Warning: 'all_labels' not found or empty in Dataset. Using standard shuffling.")
         train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=4)
     
     # In Validation, we don't need a Sampler; we want to measure on the real, unbalanced distribution
@@ -161,7 +166,7 @@ def train_one_fold(model_protocol, args, val_game, device):
                 val_correct += metrics['correct']
                 val_total += metrics['total']
         
-        epoch_loss = running_loss / len(train_loader)
+        epoch_loss = running_loss / len(train_loader) if len(train_loader) > 0 else 0
         train_acc = 100 * train_correct / train_total if train_total > 0 else 0
         val_acc = 100 * val_correct / val_total if val_total > 0 else 0
         

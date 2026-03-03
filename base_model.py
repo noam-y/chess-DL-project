@@ -15,6 +15,8 @@ class BaseChessDataset(Dataset):
 
         abs_root = os.path.abspath(root_dir)
         csv_files = glob.glob(os.path.join(abs_root, '**', 'gt.csv'), recursive=True)
+        
+        missing_count = 0
 
         for csv_path in csv_files:
             game_folder = os.path.dirname(csv_path)
@@ -31,19 +33,36 @@ class BaseChessDataset(Dataset):
                 df = pd.read_csv(csv_path)
                 df.columns = df.columns.str.strip() 
                 
-                if 'file name' in df.columns and 'fen' in df.columns:
+                # Determine the column name for the filename
+                filename_col = 'file_name' if 'file_name' in df.columns else 'file name'
+                
+                if filename_col in df.columns and 'fen' in df.columns:
                     for _, row in df.iterrows():
-                        img_name = str(row['file name']).strip()
+                        img_name = str(row[filename_col]).strip()
                         fen_char = str(row['fen']).strip()
                         
-                        img_path = os.path.join(game_folder, 'images', img_name)
+                        # Check for 'tagged_images' (new dataset) or 'images' (old dataset)
+                        img_path_new = os.path.join(game_folder, 'tagged_images', img_name)
+                        img_path_old = os.path.join(game_folder, 'images', img_name)
                         
-                        if os.path.exists(img_path):
-                            self.data.append((img_path, fen_char))
-                            # Just append the raw string from the CSV!
-                            self.all_labels.append(fen_char)
+                        if os.path.exists(img_path_new):
+                            img_path = img_path_new
+                        elif os.path.exists(img_path_old):
+                            img_path = img_path_old
+                        else:
+                            missing_count += 1
+                            if missing_count <= 3:
+                                print(f"Warning: Image not found: {img_path_new} (or {img_path_old})")
+                            continue
+
+                        self.data.append((img_path, fen_char))
+                        # Just append the raw string from the CSV!
+                        self.all_labels.append(fen_char)
             except Exception as e:
                 print(f"Error reading {csv_path}: {e}")
+        
+        if missing_count > 0:
+            print(f"Dataset ({mode}): Skipped {missing_count} missing images.")
 
         # Transforms setup...
         self.target_size = 96
