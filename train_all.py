@@ -134,6 +134,10 @@ def train_one_fold(model_protocol, args, val_game, device):
 
         scheduler.step(val_loss)
 
+        # Call the optional on_epoch_end hook
+        if hasattr(model_protocol, 'on_epoch_end'):
+            model_protocol.on_epoch_end(model, epoch, optimizer)
+
         if val_f1 > best_fold_f1:
             best_fold_f1 = val_f1
             best_report = classification_report(all_targets, all_preds, zero_division=0)

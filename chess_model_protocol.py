@@ -81,3 +81,10 @@ class ChessModelProtocol(ABC):
         Returns: Piece enum
         """
         pass
+
+    def on_epoch_end(self, model, epoch, optimizer):
+        """
+        Optional hook called at the end of each epoch.
+        Can be used for unfreezing layers, scheduling, etc.
+        """
+        pass
