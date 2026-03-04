@@ -155,7 +155,7 @@ def main():
     combination_idx = 1
 
     def simple_fen(char):
-        return (char,)
+        return char
 
     for heads, sampling, use_triplet, freeze in test_combinations:
         config_name = f"H{heads}_S-{sampling}_T-{use_triplet}_F-{freeze}"
@@ -193,8 +193,7 @@ def main():
                 model.train()
                 for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1} Train", leave=False):
                     if batch is None: continue
-                    boards, chars_tuple = batch
-                    chars = chars_tuple[0]
+                    boards, chars = batch
                     inputs = boards.to(device)
 
                     t_unified, t_occ, t_color, t_piece12, t_piece6 = chars_to_tensors(chars, device)
@@ -236,9 +235,9 @@ def main():
                 with torch.no_grad():
                     for batch in val_loader:
                         if batch is None: continue
-                        boards, chars_tuple = batch
+                        boards, chars = batch
                         inputs = boards.to(device)
-                        t_unified, t_occ, t_color, t_piece12, t_piece6 = chars_to_tensors(chars_tuple[0], device)
+                        t_unified, t_occ, t_color, t_piece12, t_piece6 = chars_to_tensors(chars, device)
 
                         if heads == 1:
                             out_main, _ = model(inputs)
