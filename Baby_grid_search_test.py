@@ -3,14 +3,15 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, WeightedRandomSampler, default_collate
+from torch.utils.data import DataLoader, WeightedRandomSampler, default_collate, Dataset
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from collections import Counter
 from sklearn.metrics import f1_score
-
-from base_model import BaseChessDataset
+from PIL import Image
+import torchvision.transforms as transforms
+import torchvision.models as models
 
 # --- GLOBAL MAPPINGS ---
 CHAR_TO_UNIFIED = {'e': 0, 'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6,
@@ -18,6 +19,52 @@ CHAR_TO_UNIFIED = {'e': 0, 'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6,
 CHAR_TO_PIECE12 = {'P': 0, 'N': 1, 'B': 2, 'R': 3, 'Q': 4, 'K': 5,
                    'p': 6, 'n': 7, 'b': 8, 'r': 9, 'q': 10, 'k': 11}
 CHAR_TO_PIECE6 = {'p': 0, 'n': 1, 'b': 2, 'r': 3, 'q': 4, 'k': 5}
+
+
+# --- CUSTOM ROBUST DATASET (Bypasses BaseChessDataset Bugs) ---
+class GridDataset(Dataset):
+    def __init__(self, data_dir, mode='train', val_game=None, test_game='game5'):
+        self.data_dir = data_dir
+        self.samples = []
+        self.all_labels = []
+
+        # Standard transform
+        self.transform = transforms.Compose([
+            transforms.Resize((96, 96)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+        games = [d for d in os.listdir(data_dir) if d.startswith('game') and os.path.isdir(os.path.join(data_dir, d))]
+
+        for game in games:
+            # Slicing logic
+            if game == test_game and mode != 'test': continue
+            if mode == 'test' and game != test_game: continue
+            if mode == 'train' and game == val_game: continue
+            if mode == 'val' and game != val_game: continue
+
+            csv_path = os.path.join(data_dir, game, 'gt.csv')
+            if not os.path.exists(csv_path): continue
+
+            df = pd.read_csv(csv_path)
+            for _, row in df.iterrows():
+                img_path = os.path.join(data_dir, game, 'tagged_images', row['file_name'])
+                char = row['fen']
+                self.samples.append((img_path, char))
+                self.all_labels.append(char)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        img_path, char = self.samples[idx]
+        try:
+            img = Image.open(img_path).convert('RGB')
+            img = self.transform(img)
+            return img, char
+        except Exception:
+            return None
 
 
 # --- CUSTOM COLLATOR ---
@@ -34,16 +81,13 @@ class ConfigurableChessResNet(nn.Module):
         self.num_heads = num_heads
         self.use_freeze = use_freeze
 
-        import torchvision.models as models
         resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
         self.backbone = nn.Sequential(*list(resnet.children())[:-1])
 
         if self.use_freeze:
-            for param in self.backbone.parameters():
-                param.requires_grad = False
+            for param in self.backbone.parameters(): param.requires_grad = False
 
         num_ftrs = resnet.fc.in_features
-
         if self.num_heads == 1:
             self.head_main = nn.Linear(num_ftrs, 13)
         elif self.num_heads == 2:
@@ -121,19 +165,19 @@ def calculate_triplet_loss(features, targets, mask, device):
 # --- ENSEMBLE EVALUATOR ---
 def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device):
     data_dir = "assets/new_dataset"
-    test_ds = BaseChessDataset(data_dir, mode='test', val_game_name=test_game_name, fen_converter=lambda c: c)
+    test_ds = GridDataset(data_dir, mode='test', test_game=test_game_name)
     if len(test_ds) == 0: return 0.0
     test_loader = DataLoader(test_ds, batch_size=64, shuffle=False, num_workers=4, collate_fn=custom_collate)
 
-    models = []
+    models_list = []
     for file in os.listdir(config_dir):
         if file.endswith(".pth"):
             model = ConfigurableChessResNet(heads, freeze).to(device)
             model.load_state_dict(torch.load(os.path.join(config_dir, file), map_location=device))
             model.eval()
-            models.append(model)
+            models_list.append(model)
 
-    if not models: return 0.0
+    if not models_list: return 0.0
 
     all_preds, all_targets = [], []
     with torch.no_grad():
@@ -144,7 +188,7 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device)
             t_unified, _, _, _, _ = chars_to_tensors(chars, device)
 
             ensemble_probs = torch.zeros((inputs.size(0), 13), device=device)
-            for model in models:
+            for model in models_list:
                 if heads == 1:
                     out_main, _ = model(inputs)
                     ensemble_probs += F.softmax(out_main, dim=1)
@@ -167,7 +211,7 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device)
                         unified_prob[:, i + 7] = prob_occ[:, 1] * prob_color[:, 0] * prob_piece6[:, i]
                     ensemble_probs += unified_prob
 
-            ensemble_probs /= len(models)
+            ensemble_probs /= len(models_list)
             all_preds.extend(torch.argmax(ensemble_probs, dim=1).cpu().numpy())
             all_targets.extend(t_unified.cpu().numpy())
 
@@ -198,9 +242,11 @@ def main():
 
         for val_game in all_games:
             print(f"\n--- Fold: Validating on {val_game} ---")
-            train_ds = BaseChessDataset(data_dir, mode='train', val_game_name=val_game, fen_converter=lambda c: c)
-            val_ds = BaseChessDataset(data_dir, mode='val', val_game_name=val_game, fen_converter=lambda c: c)
-            if len(train_ds) == 0: continue
+            train_ds = GridDataset(data_dir, mode='train', val_game=val_game)
+            val_ds = GridDataset(data_dir, mode='val', val_game=val_game)
+            if len(train_ds) == 0:
+                print(f"Skipping {val_game} (No training data found)")
+                continue
 
             sampler = get_sampler(sampling, train_ds.all_labels)
             train_loader = DataLoader(train_ds, batch_size=32, sampler=sampler, shuffle=(sampler is None),
@@ -301,7 +347,7 @@ def main():
         "\n=============================================\nBABY GRID SEARCH COMPLETE!\n=============================================")
     final_df = pd.DataFrame(results).sort_values(by="Mean 4-Fold F1", ascending=False)
     final_df.to_csv(os.path.join(output_base, "BABY_FINAL_RESULTS.csv"), index=False)
-    print(final_df.to_markdown(index=False))
+    print(final_df.to_string(index=False))  # <--- FIXED: No tabulate dependency!
 
 
 if __name__ == "__main__":
