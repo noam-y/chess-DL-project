@@ -1,8 +1,15 @@
-# Ignore data folders
+# Ignore the massive dataset folder
 assets/
-labeled_data/
-__pycache__/
+
+# Ignore the saved model weights and experiment folders
+SUPER_SEARCH_9001_results/
+baby_grid_results/
 *.pth
-.DS_Store
-.vscode/
-BASE_TO_AUGMENT/
+
+# Ignore Slurm output log files
+*.out
+
+# Standard Python ignores
+__pycache__/
+*.pyc
+.ipynb_checkpoints
