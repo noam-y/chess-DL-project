@@ -101,7 +101,7 @@ class ConfigurableChessResNet(nn.Module):
 
 # --- EARLY STOPPING ---
 class EarlyStopping:
-    def __init__(self, patience=5, min_delta=0.0):
+    def __init__(self, patience=50, min_delta=0.0):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -226,7 +226,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Starting 36-Combination Grid Search on {device}...")
     
-    heads_opts = [3]
+    heads_opts = [1, 2, 3]
     sample_opts = ['uniform', '50_50', 'none']
     triplet_opts = [True, False]
     freeze_opts = [True, False]
@@ -257,12 +257,12 @@ def main():
             model = ConfigurableChessResNet(heads, freeze).to(device)
             optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.0001, weight_decay=1e-4)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
-            early_stopping = EarlyStopping(patience=5)
+            early_stopping = EarlyStopping(patience=70)
             
             best_fold_f1 = 0.0
             
             # MAIN EVENT: Up to 100 epochs
-            for epoch in range(100):
+            for epoch in range(120):
                 progressive_unfreeze(model, epoch, optimizer)
                 model.train()
                 for batch in tqdm(train_loader, desc=f"Epoch {epoch+1} Train", leave=False):
