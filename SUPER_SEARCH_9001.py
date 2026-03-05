@@ -226,7 +226,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Starting 36-Combination Grid Search on {device}...")
     
-    heads_opts = [1, 2, 3]
+    heads_opts = [3]
     sample_opts = ['uniform', '50_50', 'none']
     triplet_opts = [True, False]
     freeze_opts = [True, False]
