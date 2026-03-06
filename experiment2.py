@@ -145,13 +145,29 @@ def get_sampler(sampling_type, labels):
 
 
 def progressive_unfreeze(model, epoch, optimizer):
-    if not hasattr(model, 'use_freeze') or not model.use_freeze: return
-    if epoch == 2:
-        for layer in list(model.backbone.children())[-3:]:
-            for param in layer.parameters(): param.requires_grad = True
-    elif epoch == 5:
-        for layer in list(model.backbone.children())[-5:-3]:
-            for param in layer.parameters(): param.requires_grad = True
+    if not hasattr(model, 'use_freeze') or not model.use_freeze:
+        return
+
+    # Unfreeze one stage every 10 epochs, from deepest to earliest.
+    # backbone children for resnet18 sequential:
+    # [conv1, bn1, relu, maxpool, layer1, layer2, layer3, layer4, avgpool]
+    schedule = {
+        10: ['layer4'],
+        20: ['layer3'],
+        30: ['layer2'],
+        40: ['layer1'],
+        50: ['conv1', 'bn1'],  # relu/maxpool have no trainable parameters
+    }
+    if epoch not in schedule:
+        return
+
+    named_backbone_layers = dict(model.backbone.named_children())
+    for layer_name in schedule[epoch]:
+        layer = named_backbone_layers.get(layer_name, None)
+        if layer is None:
+            continue
+        for param in layer.parameters():
+            param.requires_grad = True
 
 
 def chars_to_tensors(chars, device):
