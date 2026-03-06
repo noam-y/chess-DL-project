@@ -310,8 +310,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Starting 72-Combination Grid Search on {device}...")
 
-    heads_opts = [2, 3]
-    sample_opts = ['uniform', '50_50', 'none']
+    heads_opts = [1]
+    sample_opts = ['50_50']
     triplet_opts = ['old', 'new']
     freeze_opts = [True, False]
     batch_size_opts = [16, 32, 64]
@@ -344,7 +344,7 @@ def main():
             model = ConfigurableChessResNet(heads, freeze).to(device)
             optimizer = build_optimizer(model, base_lr=0.0001, freeze=freeze, backbone_lr_scale=0.1)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
-            early_stopping = EarlyStopping(patience=70)
+            early_stopping = EarlyStopping(patience=50)
             ce_criterion = nn.CrossEntropyLoss()
 
             best_fold_f1 = 0.0
