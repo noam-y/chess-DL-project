@@ -152,8 +152,6 @@ def progressive_unfreeze(model, epoch, optimizer):
     elif epoch == 5:
         for layer in list(model.backbone.children())[-5:-3]:
             for param in layer.parameters(): param.requires_grad = True
-    params_to_update = [p for p in model.parameters() if p.requires_grad]
-    optimizer.param_groups[0]['params'] = params_to_update
 
 
 def chars_to_tensors(chars, device):
@@ -179,6 +177,72 @@ def calculate_triplet_loss(features, targets, mask, device):
     hardest_positives = (pairwise_dist * labels_matrix.float()).max(dim=1)[0]
     hardest_negatives = (pairwise_dist + (pairwise_dist.max().item() + 1) * (~labels_matrix).float()).min(dim=1)[0]
     return F.relu(1.0 + hardest_positives - hardest_negatives).mean()
+
+
+def calculate_multi_similarity_loss(features, targets, mask, device, alpha=2.0, beta=50.0, base=0.5):
+    if mask.sum() < 2:
+        return torch.tensor(0.0, device=device)
+
+    occ_features, occ_targets = features[mask], targets[mask]
+    if len(occ_targets.unique()) < 2:
+        return torch.tensor(0.0, device=device)
+
+    occ_features = F.normalize(occ_features, p=2, dim=1)
+    similarity = torch.matmul(occ_features, occ_features.t())
+    labels_matrix = occ_targets.unsqueeze(0) == occ_targets.unsqueeze(1)
+    eye = torch.eye(labels_matrix.size(0), dtype=torch.bool, device=device)
+    pos_mask = labels_matrix & ~eye
+    neg_mask = ~labels_matrix
+
+    loss_terms = []
+    for i in range(similarity.size(0)):
+        pos_sim = similarity[i][pos_mask[i]]
+        neg_sim = similarity[i][neg_mask[i]]
+        if pos_sim.numel() == 0 or neg_sim.numel() == 0:
+            continue
+
+        pos_term = (1.0 / alpha) * torch.log1p(torch.exp(-alpha * (pos_sim - base)).sum())
+        neg_term = (1.0 / beta) * torch.log1p(torch.exp(beta * (neg_sim - base)).sum())
+        loss_terms.append(pos_term + neg_term)
+
+    if not loss_terms:
+        return torch.tensor(0.0, device=device)
+    return torch.stack(loss_terms).mean()
+
+
+def freeze_batchnorm_for_frozen_layers(model):
+    if not hasattr(model, "backbone"):
+        return
+
+    for layer in model.backbone.children():
+        layer_params = list(layer.parameters())
+        if not layer_params:
+            continue
+        layer_is_frozen = all(not p.requires_grad for p in layer_params)
+        if layer_is_frozen:
+            for module in layer.modules():
+                if isinstance(module, nn.BatchNorm2d):
+                    module.eval()
+                    if module.weight is not None:
+                        module.weight.requires_grad = False
+                    if module.bias is not None:
+                        module.bias.requires_grad = False
+
+
+def build_optimizer(model, base_lr, freeze, backbone_lr_scale=0.1):
+    head_params = [p for n, p in model.named_parameters() if "backbone" not in n]
+    backbone_params = [p for n, p in model.named_parameters() if "backbone" in n]
+    if freeze:
+        for p in backbone_params:
+            p.requires_grad = False
+
+    return optim.Adam(
+        [
+            {"params": head_params, "lr": base_lr},
+            {"params": backbone_params, "lr": base_lr * backbone_lr_scale},
+        ],
+        weight_decay=1e-4
+    )
 
 
 # --- ENSEMBLE EVALUATOR ---
@@ -244,20 +308,21 @@ def main():
     os.makedirs(output_base, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Starting 36-Combination Grid Search on {device}...")
+    print(f"Starting 72-Combination Grid Search on {device}...")
 
     heads_opts = [2, 3]
     sample_opts = ['uniform', '50_50', 'none']
-    triplet_opts = [True, False]
+    triplet_opts = ['old', 'new']
     freeze_opts = [True, False]
+    batch_size_opts = [16, 32, 64]
 
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
-    for combination_idx, (heads, sampling, use_triplet, freeze) in enumerate(
-            itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts), 1):
-        config_name = f"H{heads}_S-{sampling}_T-{use_triplet}_F-{freeze}"
-        print(f"\n{'=' * 60}\nModel {combination_idx}/36: {config_name}\n{'=' * 60}")
+    for combination_idx, (heads, sampling, triplet_mode, freeze, batch_size) in enumerate(
+            itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts), 1):
+        config_name = f"H{heads}_S-{sampling}_T-{triplet_mode}_F-{freeze}_B-{batch_size}"
+        print(f"\n{'=' * 60}\nModel {combination_idx}/72: {config_name}\n{'=' * 60}")
 
         config_dir = os.path.join(output_base, config_name)
         os.makedirs(config_dir, exist_ok=True)
@@ -272,12 +337,12 @@ def main():
                 continue
 
             sampler = get_sampler(sampling, train_ds.all_labels)
-            train_loader = DataLoader(train_ds, batch_size=32, sampler=sampler, shuffle=(sampler is None),
+            train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, shuffle=(sampler is None),
                                       num_workers=4, collate_fn=custom_collate)
             val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=4, collate_fn=custom_collate)
 
             model = ConfigurableChessResNet(heads, freeze).to(device)
-            optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.0001, weight_decay=1e-4)
+            optimizer = build_optimizer(model, base_lr=0.0001, freeze=freeze, backbone_lr_scale=0.1)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
             early_stopping = EarlyStopping(patience=70)
 
@@ -287,6 +352,7 @@ def main():
             for epoch in range(120):
                 progressive_unfreeze(model, epoch, optimizer)
                 model.train()
+                freeze_batchnorm_for_frozen_layers(model)
                 for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1} Train", leave=False):
                     if batch is None: continue
                     boards, chars = batch
@@ -300,19 +366,28 @@ def main():
                     if heads == 1:
                         out_main, features = model(inputs)
                         total_loss += nn.CrossEntropyLoss()(out_main, t_unified)
-                        if use_triplet: total_loss += calculate_triplet_loss(features, t_unified, mask, device)
+                        if triplet_mode == 'old':
+                            total_loss += calculate_triplet_loss(features, t_unified, mask, device)
+                        else:
+                            total_loss += calculate_multi_similarity_loss(features, t_unified, mask, device)
                     elif heads == 2:
                         out_occ, out_piece, features = model(inputs)
                         total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
                         if mask.sum() > 0: total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece12[mask])
-                        if use_triplet: total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        if triplet_mode == 'old':
+                            total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        else:
+                            total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
                     elif heads == 3:
                         out_occ, out_color, out_piece, features = model(inputs)
                         total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
                         if mask.sum() > 0:
                             total_loss += nn.CrossEntropyLoss()(out_color[mask], t_color[mask])
                             total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece6[mask])
-                        if use_triplet: total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        if triplet_mode == 'old':
+                            total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        else:
+                            total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
 
                     total_loss.backward()
                     optimizer.step()
@@ -368,15 +443,16 @@ def main():
             "Config ID": config_name,
             "Heads": heads,
             "Sampling": sampling,
-            "Triplet Loss": use_triplet,
+            "Triplet Loss": triplet_mode,
             "Freeze Backbone": freeze,
+            "Batch Size": batch_size,
             "Mean 4-Fold F1": mean_cv_f1,
             "Ensemble Test F1 (game5)": ensemble_test_f1
         })
         pd.DataFrame(results).to_csv(os.path.join(output_base, "running_results.csv"), index=False)
 
     print(
-        "\n=============================================\nALL 36 PERMUTATIONS COMPLETE!\n=============================================")
+        "\n=============================================\nALL 72 PERMUTATIONS COMPLETE!\n=============================================")
     final_df = pd.DataFrame(results).sort_values(by="Ensemble Test F1 (game5)", ascending=False)
     final_df.to_csv(os.path.join(output_base, "FINAL_RESULTS.csv"), index=False)
     print(final_df.to_string(index=False))
