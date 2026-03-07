@@ -341,7 +341,7 @@ def main():
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
-    for combination_idx, (heads, sampling, triplet_mode, freeze, batch_size) in combs:
+    for combination_idx, (heads, sampling, triplet_mode, freeze, batch_size) in enumerate(combs, 1):
             # enumerate(itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts), 1)):
         config_name = f"H{heads}_S-{sampling}_T-{triplet_mode}_F-{freeze}_B-{batch_size}"
         print(f"\n{'=' * 60}\nModel {combination_idx}/72: {config_name}\n{'=' * 60}")
