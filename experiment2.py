@@ -109,7 +109,7 @@ class ConfigurableChessResNet(nn.Module):
 
 # --- EARLY STOPPING ---
 class EarlyStopping:
-    def __init__(self, patience=30, min_delta=0.0):
+    def __init__(self, patience=50, min_delta=0.0):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -366,13 +366,13 @@ def main():
             model = ConfigurableChessResNet(heads, freeze).to(device)
             optimizer = build_optimizer(model, base_lr=0.0001, freeze=freeze, backbone_lr_scale=0.1)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
-            early_stopping = EarlyStopping(patience=30)
+            early_stopping = EarlyStopping(patience=50)
             ce_criterion = nn.CrossEntropyLoss()
 
             best_fold_f1 = 0.0
 
             # MAIN EVENT: Up to 100 epochs
-            for epoch in range(70):
+            for epoch in range(120):
                 progressive_unfreeze(model, epoch, optimizer)
                 model.train()
                 freeze_batchnorm_for_frozen_layers(model)
