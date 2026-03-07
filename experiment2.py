@@ -319,7 +319,7 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device)
 # --- MAIN GRID SEARCH ---
 def main():
     data_dir = "assets/new_dataset"
-    output_base = "SUPER_SEARCH_9001_results"
+    output_base = "experiment2_results"
     os.makedirs(output_base, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -481,7 +481,7 @@ def main():
             "Mean 4-Fold F1": mean_cv_f1,
             "Ensemble Test F1 (game5)": ensemble_test_f1
         })
-        pd.DataFrame(results).to_csv(os.path.join(output_base, "running_results.csv"), index=False)
+        pd.DataFrame(results).to_csv(os.path.join(output_base, "running_results_exp.csv"), index=False)
 
     print(
         "\n=============================================\nALL 72 PERMUTATIONS COMPLETE!\n=============================================")
