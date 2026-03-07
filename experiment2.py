@@ -325,17 +325,24 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Starting 72-Combination Grid Search on {device}...")
 
-    heads_opts = [1]
+    heads_opts = [1, 2, 3]
     sample_opts = ['50_50']
-    triplet_opts = ['old', 'new']
+    triplet_opts = ['new']
     freeze_opts = [True, False]
     batch_size_opts = [16, 32, 64]
+
+    combs = [[1, '50_50', 'old', True, 32],  # og number 1 seed
+             [1, '50_50', 'new', True, 16],  # my improvment
+             [3, '50_50', 'old', False, 32], # og number 2 seed
+             [3, '50_50', 'new', True, 16],  # my improvment
+             [1, 'none', 'old', False, 32],  # og number 3 seed
+             [2, '50_50', 'new', True, 16]]  # my guess
 
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
-    for combination_idx, (heads, sampling, triplet_mode, freeze, batch_size) in enumerate(
-            itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts), 1):
+    for combination_idx, (heads, sampling, triplet_mode, freeze, batch_size) in combs:
+            # enumerate(itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts), 1)):
         config_name = f"H{heads}_S-{sampling}_T-{triplet_mode}_F-{freeze}_B-{batch_size}"
         print(f"\n{'=' * 60}\nModel {combination_idx}/72: {config_name}\n{'=' * 60}")
 
