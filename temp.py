@@ -347,9 +347,10 @@ def main():
             val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=4, collate_fn=custom_collate)
 
             model = ConfigurableChessResNet(heads, freeze).to(device)
-            optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.0001, weight_decay=1e-4)
+            optimizer = build_optimizer(model, base_lr=0.0001, freeze=freeze, backbone_lr_scale=0.1)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
             early_stopping = EarlyStopping(patience=70)
+            ce_criterion = nn.CrossEntropyLoss()
 
             best_fold_f1 = 0.0
 
@@ -358,6 +359,9 @@ def main():
                 progressive_unfreeze(model, epoch, optimizer)
                 model.train()
                 freeze_batchnorm_for_frozen_layers(model)
+                epoch_ce_loss_sum = 0.0
+                epoch_metric_loss_sum = 0.0
+                epoch_batches = 0
                 for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1} Train", leave=False):
                     if batch is None: continue
                     boards, chars = batch
@@ -365,28 +369,42 @@ def main():
                     t_unified, t_occ, t_color, t_piece12, t_piece6 = chars_to_tensors(chars, device)
 
                     optimizer.zero_grad()
-                    total_loss = torch.tensor(0.0, device=device)
+                    ce_loss = torch.tensor(0.0, device=device)
+                    metric_loss = torch.tensor(0.0, device=device)
                     mask = (t_occ == 1)
 
                     if heads == 1:
                         out_main, features = model(inputs)
-                        total_loss += nn.CrossEntropyLoss()(out_main, t_unified)
-                        if use_triplet: total_loss += calculate_triplet_loss(features, t_unified, mask, device)
+                        ce_loss += ce_criterion(out_main, t_unified)
+                        if triplet_mode == 'old':
+                            metric_loss += calculate_triplet_loss(features, t_unified, mask, device)
+                        else:
+                            metric_loss += calculate_multi_similarity_loss(features, t_unified, mask, device)
                     elif heads == 2:
                         out_occ, out_piece, features = model(inputs)
-                        total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
-                        if mask.sum() > 0: total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece12[mask])
-                        if use_triplet: total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        ce_loss += ce_criterion(out_occ, t_occ)
+                        if mask.sum() > 0: ce_loss += ce_criterion(out_piece[mask], t_piece12[mask])
+                        if triplet_mode == 'old':
+                            metric_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        else:
+                            metric_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
                     elif heads == 3:
                         out_occ, out_color, out_piece, features = model(inputs)
-                        total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
+                        ce_loss += ce_criterion(out_occ, t_occ)
                         if mask.sum() > 0:
-                            total_loss += nn.CrossEntropyLoss()(out_color[mask], t_color[mask])
-                            total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece6[mask])
-                        if use_triplet: total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                            ce_loss += ce_criterion(out_color[mask], t_color[mask])
+                            ce_loss += ce_criterion(out_piece[mask], t_piece6[mask])
+                        if triplet_mode == 'old':
+                            metric_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        else:
+                            metric_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
 
+                    total_loss = ce_loss + metric_loss
                     total_loss.backward()
                     optimizer.step()
+                    epoch_ce_loss_sum += ce_loss.item()
+                    epoch_metric_loss_sum += metric_loss.item()
+                    epoch_batches += 1
 
                 model.eval()
                 all_preds, all_targets = [], []
