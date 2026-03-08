@@ -324,10 +324,6 @@ def main():
     all_combinations = list(itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts))
     todo = combs + all_combinations
 
-    print(f"Total experiments to run: {len(todo)}")
-    print("combs: ", combs)
-    print("all_combinations: ", all_combinations)
-    print("todo: ", todo)
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
@@ -339,6 +335,8 @@ def main():
         config_dir = os.path.join(output_base, config_name)
         os.makedirs(config_dir, exist_ok=True)
         fold_f1_scores = []
+        fold_epochs = {}
+        fold_scores = {}
 
         for val_game in all_games:
             print(f"\n--- Fold: Validating on {val_game} ---")
@@ -359,9 +357,11 @@ def main():
             early_stopping = EarlyStopping(patience=70)
 
             best_fold_f1 = 0.0
+            final_epoch = 0
 
             # MAIN EVENT: Up to 100 epochs
-            for epoch in range(120):
+            for epoch in range(100):
+                final_epoch = epoch + 1
                 progressive_unfreeze(model, epoch, optimizer)
                 model.train()
                 freeze_batchnorm_for_frozen_layers(model)
@@ -426,7 +426,6 @@ def main():
                 print(
                     f"   Epoch {epoch + 1}: "
                     f"Val F1={val_f1:.2f}% | "
-                    f"loss ={total_loss:.4f}"
                 )
                 scheduler.step(val_f1)
 
@@ -439,6 +438,8 @@ def main():
                     print(f"   -> Early stopping triggered at epoch {epoch + 1} (Best F1: {best_fold_f1:.2f}%)")
                     break
 
+            fold_epochs[val_game] = final_epoch
+            fold_scores[val_game] = best_fold_f1
             fold_f1_scores.append(best_fold_f1)
 
         mean_cv_f1 = np.mean(fold_f1_scores) if fold_f1_scores else 0
@@ -457,7 +458,15 @@ def main():
             "Freeze Backbone": freeze,
             "Batch Size": batch_size,
             "Mean 4-Fold F1": mean_cv_f1,
-            "Ensemble Test F1 (game5)": ensemble_test_f1
+            "Ensemble Test F1 (game5)": ensemble_test_f1,
+            "Epochs game2": fold_epochs.get('game2', 0),
+            "Best F1 game2": fold_scores.get('game2', 0),
+            "Epochs game4": fold_epochs.get('game4', 0),
+            "Best F1 game4": fold_scores.get('game4', 0),
+            "Epochs game6": fold_epochs.get('game6', 0),
+            "Best F1 game6": fold_scores.get('game6', 0),
+            "Epochs game7": fold_epochs.get('game7', 0),
+            "Best F1 game7": fold_scores.get('game7', 0)
         })
         pd.DataFrame(results).to_csv(os.path.join(output_base, "running_results_exp_114.csv"), index=False)
 
