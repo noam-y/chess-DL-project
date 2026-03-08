@@ -416,13 +416,10 @@ def main():
                         all_targets.extend(t_unified.cpu().numpy())
 
                 val_f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0) * 100
-                avg_ce_loss = epoch_ce_loss_sum / max(1, epoch_batches)
-                avg_triplet_loss = epoch_metric_loss_sum / max(1, epoch_batches)
                 print(
                     f"   Epoch {epoch + 1}: "
                     f"Val F1={val_f1:.2f}% | "
-                    f"CrossEntropy Loss={avg_ce_loss:.4f} | "
-                    f"Triplet Loss ({triplet_mode})={avg_triplet_loss:.4f}"
+                    f"loss ={total_loss:.4f}"
                 )
                 scheduler.step(val_f1)
 
