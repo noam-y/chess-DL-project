@@ -302,7 +302,7 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device)
 # --- MAIN GRID SEARCH ---
 def main():
     data_dir = "assets/new_dataset"
-    output_base = "experiment3_results"
+    output_base = "experiment4_results"
     os.makedirs(output_base, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -321,10 +321,12 @@ def main():
              [1, 'none', 'old', False, 32],  # og number 3 seed
              [2, '50_50', 'new', True, 16]]  # my guess
 
+    todo = combs.append(itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts))
+
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
-    for combination_idx, (heads, sampling, triplet_mode, freeze, batch_size) in enumerate(combs, 1):
+    for combination_idx, (heads, sampling, triplet_mode, freeze, batch_size) in enumerate(todo, 1):
             # enumerate(itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts), 1)):
         config_name = f"H{heads}_S-{sampling}_T-{triplet_mode}_F-{freeze}_B-{batch_size}"
         print(f"\n{'=' * 60}\nModel {combination_idx}/72: {config_name}\n{'=' * 60}")
