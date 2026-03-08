@@ -314,10 +314,10 @@ def main():
     freeze_opts = [True, False]
     batch_size_opts = [16, 32, 64]
 
-    combs = [[1, '50_50', 'old', True, 32],  # og number 1 seed
-             [1, '50_50', 'new', True, 16],  # my improvment
-             [3, '50_50', 'old', False, 32], # og number 2 seed
-             [3, '50_50', 'new', True, 16],  # my improvment
+    # combs = [[1, '50_50', 'old', True, 32],  # og number 1 seed
+    #          [1, '50_50', 'new', True, 16],  # my improvment
+    #          [3, '50_50', 'old', False, 32], # og number 2 seed
+    combs = [[3, '50_50', 'new', True, 16],  # my improvment
              [1, 'none', 'old', False, 32],  # og number 3 seed
              [2, '50_50', 'new', True, 16]]  # my guess
 
