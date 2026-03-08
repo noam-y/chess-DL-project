@@ -354,7 +354,7 @@ def main():
             model = ConfigurableChessResNet(heads, freeze).to(device)
             optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.0001, weight_decay=1e-4)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
-            early_stopping = EarlyStopping(patience=70)
+            early_stopping = EarlyStopping(patience=40)
 
             best_fold_f1 = 0.0
             final_epoch = 0
