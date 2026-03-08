@@ -21,7 +21,6 @@ CHAR_TO_PIECE12 = {'P': 0, 'N': 1, 'B': 2, 'R': 3, 'Q': 4, 'K': 5,
                    'p': 6, 'n': 7, 'b': 8, 'r': 9, 'q': 10, 'k': 11}
 CHAR_TO_PIECE6 = {'p': 0, 'n': 1, 'b': 2, 'r': 3, 'q': 4, 'k': 5}
 
-
 # --- CUSTOM ROBUST DATASET ---
 class GridDataset(Dataset):
     def __init__(self, data_dir, mode='train', val_game=None, test_game='game5'):
@@ -65,13 +64,11 @@ class GridDataset(Dataset):
         except Exception:
             return None
 
-
 # --- CUSTOM COLLATOR ---
 def custom_collate(batch):
     batch = [item for item in batch if item is not None]
     if len(batch) == 0: return None
     return default_collate(batch)
-
 
 # --- DYNAMIC CONFIGURABLE MODEL ---
 class ConfigurableChessResNet(nn.Module):
@@ -87,8 +84,7 @@ class ConfigurableChessResNet(nn.Module):
             for param in self.backbone.parameters(): param.requires_grad = False
 
         num_ftrs = resnet.fc.in_features
-        if self.num_heads == 1:
-            self.head_main = nn.Linear(num_ftrs, 13)
+        if self.num_heads == 1: self.head_main = nn.Linear(num_ftrs, 13)
         elif self.num_heads == 2:
             self.head_occ = nn.Linear(num_ftrs, 2)
             self.head_piece = nn.Linear(num_ftrs, 12)
@@ -99,13 +95,9 @@ class ConfigurableChessResNet(nn.Module):
 
     def forward(self, x):
         features = torch.flatten(self.backbone(x), 1)
-        if self.num_heads == 1:
-            return self.head_main(features), features
-        elif self.num_heads == 2:
-            return self.head_occ(features), self.head_piece(features), features
-        elif self.num_heads == 3:
-            return self.head_occ(features), self.head_color(features), self.head_piece(features), features
-
+        if self.num_heads == 1: return self.head_main(features), features
+        elif self.num_heads == 2: return self.head_occ(features), self.head_piece(features), features
+        elif self.num_heads == 3: return self.head_occ(features), self.head_color(features), self.head_piece(features), features
 
 # --- EARLY STOPPING ---
 class EarlyStopping:
@@ -126,7 +118,6 @@ class EarlyStopping:
             self.best_score = val_f1
             self.counter = 0
 
-
 # --- HELPER FUNCTIONS ---
 def get_sampler(sampling_type, labels):
     if sampling_type == 'none' or not labels: return None
@@ -136,13 +127,10 @@ def get_sampler(sampling_type, labels):
         for label in labels: sample_weights.append(1.0 / max(1, class_counts[label]))
     elif sampling_type == '50_50':
         for label in labels:
-            if label == 'e':
-                sample_weights.append(0.5 / max(1, class_counts['e']))
-            else:
-                sample_weights.append((0.5 / 12.0) / max(1, class_counts[label]))
+            if label == 'e': sample_weights.append(0.5 / max(1, class_counts['e']))
+            else: sample_weights.append((0.5 / 12.0) / max(1, class_counts[label]))
     tensor_weights = torch.tensor(sample_weights, dtype=torch.float)
     return WeightedRandomSampler(tensor_weights, len(tensor_weights), replacement=True)
-
 
 def progressive_unfreeze(model, epoch, optimizer):
     if not hasattr(model, 'use_freeze') or not model.use_freeze:
@@ -172,13 +160,10 @@ def progressive_unfreeze(model, epoch, optimizer):
 def chars_to_tensors(chars, device):
     t_unified = torch.tensor([CHAR_TO_UNIFIED[c] for c in chars], dtype=torch.long, device=device)
     t_occ = torch.tensor([0 if c == 'e' else 1 for c in chars], dtype=torch.long, device=device)
-    t_color = torch.tensor([0 if c == 'e' else (1 if c.isupper() else 0) for c in chars], dtype=torch.long,
-                           device=device)
+    t_color = torch.tensor([0 if c == 'e' else (1 if c.isupper() else 0) for c in chars], dtype=torch.long, device=device)
     t_piece12 = torch.tensor([0 if c == 'e' else CHAR_TO_PIECE12[c] for c in chars], dtype=torch.long, device=device)
-    t_piece6 = torch.tensor([0 if c == 'e' else CHAR_TO_PIECE6[c.lower()] for c in chars], dtype=torch.long,
-                            device=device)
+    t_piece6 = torch.tensor([0 if c == 'e' else CHAR_TO_PIECE6[c.lower()] for c in chars], dtype=torch.long, device=device)
     return t_unified, t_occ, t_color, t_piece12, t_piece6
-
 
 def calculate_triplet_loss(features, targets, mask, device):
     if mask.sum() < 2: return torch.tensor(0.0, device=device)
@@ -299,9 +284,7 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device)
                     ensemble_probs += unified_prob
                 elif heads == 3:
                     out_occ, out_color, out_piece, _ = model(inputs)
-                    prob_occ, prob_color, prob_piece6 = F.softmax(out_occ, dim=1), F.softmax(out_color,
-                                                                                             dim=1), F.softmax(
-                        out_piece, dim=1)
+                    prob_occ, prob_color, prob_piece6 = F.softmax(out_occ, dim=1), F.softmax(out_color, dim=1), F.softmax(out_piece, dim=1)
                     unified_prob = torch.zeros((inputs.size(0), 13), device=device)
                     unified_prob[:, 0] = prob_occ[:, 0]
                     for i in range(6):
@@ -319,7 +302,7 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device)
 # --- MAIN GRID SEARCH ---
 def main():
     data_dir = "assets/new_dataset"
-    output_base = "experiment2_results"
+    output_base = "experiment3_results"
     os.makedirs(output_base, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -364,10 +347,9 @@ def main():
             val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=4, collate_fn=custom_collate)
 
             model = ConfigurableChessResNet(heads, freeze).to(device)
-            optimizer = build_optimizer(model, base_lr=0.0001, freeze=freeze, backbone_lr_scale=0.1)
+            optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.0001, weight_decay=1e-4)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
-            early_stopping = EarlyStopping(patience=50)
-            ce_criterion = nn.CrossEntropyLoss()
+            early_stopping = EarlyStopping(patience=70)
 
             best_fold_f1 = 0.0
 
@@ -376,9 +358,6 @@ def main():
                 progressive_unfreeze(model, epoch, optimizer)
                 model.train()
                 freeze_batchnorm_for_frozen_layers(model)
-                epoch_ce_loss_sum = 0.0
-                epoch_metric_loss_sum = 0.0
-                epoch_batches = 0
                 for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1} Train", leave=False):
                     if batch is None: continue
                     boards, chars = batch
@@ -386,42 +365,28 @@ def main():
                     t_unified, t_occ, t_color, t_piece12, t_piece6 = chars_to_tensors(chars, device)
 
                     optimizer.zero_grad()
-                    ce_loss = torch.tensor(0.0, device=device)
-                    metric_loss = torch.tensor(0.0, device=device)
+                    total_loss = torch.tensor(0.0, device=device)
                     mask = (t_occ == 1)
 
                     if heads == 1:
                         out_main, features = model(inputs)
-                        ce_loss += ce_criterion(out_main, t_unified)
-                        if triplet_mode == 'old':
-                            metric_loss += calculate_triplet_loss(features, t_unified, mask, device)
-                        else:
-                            metric_loss += calculate_multi_similarity_loss(features, t_unified, mask, device)
+                        total_loss += nn.CrossEntropyLoss()(out_main, t_unified)
+                        if use_triplet: total_loss += calculate_triplet_loss(features, t_unified, mask, device)
                     elif heads == 2:
                         out_occ, out_piece, features = model(inputs)
-                        ce_loss += ce_criterion(out_occ, t_occ)
-                        if mask.sum() > 0: ce_loss += ce_criterion(out_piece[mask], t_piece12[mask])
-                        if triplet_mode == 'old':
-                            metric_loss += calculate_triplet_loss(features, t_piece12, mask, device)
-                        else:
-                            metric_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                        total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
+                        if mask.sum() > 0: total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece12[mask])
+                        if use_triplet: total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
                     elif heads == 3:
                         out_occ, out_color, out_piece, features = model(inputs)
-                        ce_loss += ce_criterion(out_occ, t_occ)
+                        total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
                         if mask.sum() > 0:
-                            ce_loss += ce_criterion(out_color[mask], t_color[mask])
-                            ce_loss += ce_criterion(out_piece[mask], t_piece6[mask])
-                        if triplet_mode == 'old':
-                            metric_loss += calculate_triplet_loss(features, t_piece12, mask, device)
-                        else:
-                            metric_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                            total_loss += nn.CrossEntropyLoss()(out_color[mask], t_color[mask])
+                            total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece6[mask])
+                        if use_triplet: total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
 
-                    total_loss = ce_loss + metric_loss
                     total_loss.backward()
                     optimizer.step()
-                    epoch_ce_loss_sum += ce_loss.item()
-                    epoch_metric_loss_sum += metric_loss.item()
-                    epoch_batches += 1
 
                 model.eval()
                 all_preds, all_targets = [], []
@@ -440,9 +405,7 @@ def main():
                             preds = torch.where(torch.argmax(out_occ, 1) == 0, 0, torch.argmax(out_piece, 1) + 1)
                         elif heads == 3:
                             out_occ, out_color, out_piece, _ = model(inputs)
-                            p_occ, p_color, p_piece6 = torch.argmax(out_occ, 1), torch.argmax(out_color,
-                                                                                              1), torch.argmax(
-                                out_piece, 1)
+                            p_occ, p_color, p_piece6 = torch.argmax(out_occ, 1), torch.argmax(out_color, 1), torch.argmax(out_piece, 1)
                             preds = torch.where(p_occ == 0, 0, torch.where(p_color == 1, p_piece6 + 1, p_piece6 + 7))
 
                         all_preds.extend(preds.cpu().numpy())
