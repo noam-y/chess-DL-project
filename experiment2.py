@@ -371,19 +371,23 @@ def main():
                     if heads == 1:
                         out_main, features = model(inputs)
                         total_loss += nn.CrossEntropyLoss()(out_main, t_unified)
-                        if use_triplet: total_loss += calculate_triplet_loss(features, t_unified, mask, device)
+                        if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_unified, mask, device)
+                        else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
                     elif heads == 2:
                         out_occ, out_piece, features = model(inputs)
                         total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
                         if mask.sum() > 0: total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece12[mask])
-                        if use_triplet: total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
                     elif heads == 3:
                         out_occ, out_color, out_piece, features = model(inputs)
                         total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
                         if mask.sum() > 0:
                             total_loss += nn.CrossEntropyLoss()(out_color[mask], t_color[mask])
                             total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece6[mask])
-                        if use_triplet: total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+
 
                     total_loss.backward()
                     optimizer.step()
