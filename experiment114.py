@@ -321,8 +321,11 @@ def main():
              [1, 'none', 'old', False, 32],  # og number 3 seed
              [2, '50_50', 'new', True, 16]]  # my guess
 
-    todo = combs.append(itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts))
+    all = itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts)
+    todo = combs.append(all)
 
+    print("combs: ", combs)
+    print("all: ", all)
     print("todo: ", todo)
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
