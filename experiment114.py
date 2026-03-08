@@ -323,7 +323,7 @@ def main():
 
     todo = combs.append(itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts))
 
-    print(todo)
+    print("todo: ", todo)
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
