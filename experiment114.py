@@ -13,6 +13,7 @@ from sklearn.metrics import f1_score
 from PIL import Image
 import torchvision.transforms as transforms
 import torchvision.models as models
+import torchvision.transforms.functional as TF
 
 # --- GLOBAL MAPPINGS ---
 CHAR_TO_UNIFIED = {'e': 0, 'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6,
@@ -206,6 +207,100 @@ def chars_to_tensors(chars, device):
     t_piece6 = torch.tensor([0 if c == 'e' else CHAR_TO_PIECE6[c.lower()] for c in chars], dtype=torch.long, device=device)
     return t_unified, t_occ, t_color, t_piece12, t_piece6
 
+
+def denormalize_batch(inputs):
+    mean = torch.tensor([0.485, 0.456, 0.406], device=inputs.device).view(1, 3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225], device=inputs.device).view(1, 3, 1, 1)
+    return torch.clamp(inputs * std + mean, 0.0, 1.0)
+
+
+def normalize_batch(inputs):
+    mean = torch.tensor([0.485, 0.456, 0.406], device=inputs.device).view(1, 3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225], device=inputs.device).view(1, 3, 1, 1)
+    return (inputs - mean) / std
+
+
+def blacken_edges_tensor(inputs, edge_ratio=0.25):
+    out = inputs.clone()
+    _, _, h, w = out.shape
+    top = int(h * edge_ratio)
+    bottom = int(h * edge_ratio)
+    left = int(w * edge_ratio)
+    right = int(w * edge_ratio)
+    if top > 0:
+        out[:, :, :top, :] = 0.0
+    if bottom > 0:
+        out[:, :, h - bottom:, :] = 0.0
+    if left > 0:
+        out[:, :, :, :left] = 0.0
+    if right > 0:
+        out[:, :, :, w - right:] = 0.0
+    return out
+
+
+def build_test_time_aug_batches(inputs):
+    denorm = denormalize_batch(inputs)
+
+    aug_color_rot = []
+    for img in denorm:
+        brightness = 1.0 + float(torch.empty(1).uniform_(-0.1, 0.1))
+        contrast = 1.0 + float(torch.empty(1).uniform_(-0.1, 0.1))
+        saturation = 1.0 + float(torch.empty(1).uniform_(-0.05, 0.05))
+        hue = float(torch.empty(1).uniform_(-0.01, 0.01))
+        angle = float(torch.empty(1).uniform_(-3.0, 3.0))
+
+        img_aug = TF.adjust_brightness(img, brightness)
+        img_aug = TF.adjust_contrast(img_aug, contrast)
+        img_aug = TF.adjust_saturation(img_aug, saturation)
+        img_aug = TF.adjust_hue(img_aug, hue)
+        img_aug = TF.rotate(
+            img_aug,
+            angle=angle,
+            interpolation=transforms.InterpolationMode.BILINEAR,
+            fill=0.0
+        )
+        aug_color_rot.append(torch.clamp(img_aug, 0.0, 1.0))
+
+    aug_color_rot = normalize_batch(torch.stack(aug_color_rot, dim=0))
+    aug_black_edges = normalize_batch(blacken_edges_tensor(denorm, edge_ratio=0.25))
+    return [inputs, aug_color_rot, aug_black_edges]
+
+
+def unified_probs_from_outputs(model, inputs, heads):
+    if heads == 1:
+        out_main, _ = model(inputs)
+        return F.softmax(out_main, dim=1)
+    if heads == 2:
+        out_occ, out_piece, _ = model(inputs)
+        prob_occ = F.softmax(out_occ, dim=1)
+        prob_piece = F.softmax(out_piece, dim=1)
+        unified_prob = torch.zeros((inputs.size(0), 13), device=inputs.device)
+        unified_prob[:, 0] = prob_occ[:, 0]
+        for i in range(12):
+            unified_prob[:, i + 1] = prob_occ[:, 1] * prob_piece[:, i]
+        return unified_prob
+
+    out_occ, out_white_piece, out_black_piece, _ = model(inputs)
+    prob_occ = F.softmax(out_occ, dim=1)
+    prob_white_piece = F.softmax(out_white_piece, dim=1)
+    prob_black_piece = F.softmax(out_black_piece, dim=1)
+    unified_prob = torch.zeros((inputs.size(0), 13), device=inputs.device)
+    unified_prob[:, 0] = prob_occ[:, 0]
+    for i in range(6):
+        unified_prob[:, i + 1] = prob_occ[:, 1] * 0.5 * prob_white_piece[:, i]
+        unified_prob[:, i + 7] = prob_occ[:, 1] * 0.5 * prob_black_piece[:, i]
+    return unified_prob
+
+
+def infer_unified_probs(model, inputs, heads, test_aug=False):
+    if not test_aug:
+        return unified_probs_from_outputs(model, inputs, heads)
+
+    tta_inputs = build_test_time_aug_batches(inputs)
+    tta_probs = [unified_probs_from_outputs(model, aug_inputs, heads) for aug_inputs in tta_inputs]
+    return torch.stack(tta_probs, dim=0).mean(dim=0)
+
+
 def calculate_triplet_loss(features, targets, mask, device):
     if mask.sum() < 2: return torch.tensor(0.0, device=device)
     occ_features, occ_targets = features[mask], targets[mask]
@@ -315,7 +410,7 @@ def build_optimizer(model, freezing, head_lr=1e-4, backbone_lr=1e-5, weight_deca
 
 
 # --- ENSEMBLE EVALUATOR ---
-def evaluate_ensemble_on_test(config_dir, test_game_name, heads, device):
+def evaluate_ensemble_on_test(config_dir, test_game_name, heads, device, test_aug=False):
     data_dir = "assets/new_dataset"
     test_ds = GridDataset(data_dir, mode='test', test_game=test_game_name)
     if len(test_ds) == 0: return 0.0
@@ -341,28 +436,7 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, device):
 
             ensemble_probs = torch.zeros((inputs.size(0), 13), device=device)
             for model in models_list:
-                if heads == 1:
-                    out_main, _ = model(inputs)
-                    ensemble_probs += F.softmax(out_main, dim=1)
-                elif heads == 2:
-                    out_occ, out_piece, _ = model(inputs)
-                    prob_occ, prob_piece = F.softmax(out_occ, dim=1), F.softmax(out_piece, dim=1)
-                    unified_prob = torch.zeros((inputs.size(0), 13), device=device)
-                    unified_prob[:, 0] = prob_occ[:, 0]
-                    for i in range(12): unified_prob[:, i + 1] = prob_occ[:, 1] * prob_piece[:, i]
-                    ensemble_probs += unified_prob
-                elif heads == 3:
-                    out_occ, out_white_piece, out_black_piece, _ = model(inputs)
-                    prob_occ = F.softmax(out_occ, dim=1)
-                    prob_white_piece = F.softmax(out_white_piece, dim=1)
-                    prob_black_piece = F.softmax(out_black_piece, dim=1)
-                    unified_prob = torch.zeros((inputs.size(0), 13), device=device)
-                    unified_prob[:, 0] = prob_occ[:, 0]
-                    for i in range(6):
-                        # Split occupied probability equally between white/black branches.
-                        unified_prob[:, i + 1] = prob_occ[:, 1] * 0.5 * prob_white_piece[:, i]
-                        unified_prob[:, i + 7] = prob_occ[:, 1] * 0.5 * prob_black_piece[:, i]
-                    ensemble_probs += unified_prob
+                ensemble_probs += infer_unified_probs(model, inputs, heads, test_aug=test_aug)
 
             ensemble_probs /= len(models_list)
             all_preds.extend(torch.argmax(ensemble_probs, dim=1).cpu().numpy())
@@ -388,11 +462,20 @@ def main():
     smoothing_opts = [True, False]
     freezing_opts = [True, False]
     data_aug_opts = [True, False]
+    test_aug_opts = [True, False]
 
 
     all_combinations = list(
         itertools.product(
-            heads_opts, sample_opts, triplet_opts, batch_size_opts, loss_opts, smoothing_opts, freezing_opts, data_aug_opts
+            heads_opts,
+            sample_opts,
+            triplet_opts,
+            batch_size_opts,
+            loss_opts,
+            smoothing_opts,
+            freezing_opts,
+            data_aug_opts,
+            test_aug_opts
         )
     )
     todo = all_combinations
@@ -400,9 +483,9 @@ def main():
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
-    for combination_idx, (heads, sampling, triplet_mode, batch_size, loss_name, smoothing, freezing, data_aug) in enumerate(todo, 1):
+    for combination_idx, (heads, sampling, triplet_mode, batch_size, loss_name, smoothing, freezing, data_aug, test_aug) in enumerate(todo, 1):
         config_name = (
-            f"H{heads}_S-{sampling}_T-{triplet_mode}_B-{batch_size}_L-{loss_name}_SM-{smoothing}_F-{freezing}_DA-{data_aug}"
+            f"H{heads}_S-{sampling}_T-{triplet_mode}_B-{batch_size}_L-{loss_name}_SM-{smoothing}_F-{freezing}_DA-{data_aug}_TA-{test_aug}"
         )
         print(f"\n{'=' * 60}\nModel {combination_idx}/{len(todo)}: {config_name}\n{'=' * 60}")
 
@@ -495,27 +578,9 @@ def main():
                         if batch is None: continue
                         boards, chars = batch
                         inputs = boards.to(device)
-                        t_unified, t_occ, t_color, t_piece12, t_piece6 = chars_to_tensors(chars, device)
-
-                        if heads == 1:
-                            out_main, _ = model(inputs)
-                            preds = torch.argmax(out_main, 1)
-                        elif heads == 2:
-                            out_occ, out_piece, _ = model(inputs)
-                            preds = torch.where(torch.argmax(out_occ, 1) == 0, 0, torch.argmax(out_piece, 1) + 1)
-                        elif heads == 3:
-                            out_occ, out_white_piece, out_black_piece, _ = model(inputs)
-                            p_occ = torch.argmax(out_occ, 1)
-                            p_white_piece = torch.argmax(out_white_piece, 1)
-                            p_black_piece = torch.argmax(out_black_piece, 1)
-                            white_conf = F.softmax(out_white_piece, dim=1).max(dim=1)[0]
-                            black_conf = F.softmax(out_black_piece, dim=1).max(dim=1)[0]
-                            occupied_preds = torch.where(
-                                white_conf >= black_conf,
-                                p_white_piece + 1,
-                                p_black_piece + 7
-                            )
-                            preds = torch.where(p_occ == 0, 0, occupied_preds)
+                        t_unified, _, _, _, _ = chars_to_tensors(chars, device)
+                        unified_probs = infer_unified_probs(model, inputs, heads, test_aug=test_aug)
+                        preds = torch.argmax(unified_probs, dim=1)
 
                         all_preds.extend(preds.cpu().numpy())
                         all_targets.extend(t_unified.cpu().numpy())
@@ -545,7 +610,7 @@ def main():
 
         # --- ENSEMBLE EVALUATION ---
         print(f">>> Running 4-Model Ensemble Evaluation on game5...")
-        ensemble_test_f1 = evaluate_ensemble_on_test(config_dir, "game5", heads, device)
+        ensemble_test_f1 = evaluate_ensemble_on_test(config_dir, "game5", heads, device, test_aug=test_aug)
         print(f">>> FINAL UNSEEN TEST F1: {ensemble_test_f1:.2f}%")
 
         results.append({
@@ -558,6 +623,7 @@ def main():
             "Label Smoothing": smoothing,
             "Freezing": freezing,
             "Data Augmentation": data_aug,
+            "Test-Time Augmentation": test_aug,
             "Mean 4-Fold F1": mean_cv_f1,
             "Ensemble Test F1 (game5)": ensemble_test_f1,
             "Epochs game2": fold_epochs.get('game2', 0),
