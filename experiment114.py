@@ -50,6 +50,31 @@ class RandomGaussianBlur:
         return img
 
 
+class RandomBlackenEdges:
+    def __init__(self, max_ratio=0.25):
+        self.max_ratio = max_ratio
+
+    def __call__(self, img):
+        arr = np.array(img)
+        h, w = arr.shape[:2]
+
+        top = int(torch.empty(1).uniform_(0.0, self.max_ratio).item() * h)
+        bottom = int(torch.empty(1).uniform_(0.0, self.max_ratio).item() * h)
+        left = int(torch.empty(1).uniform_(0.0, self.max_ratio).item() * w)
+        right = int(torch.empty(1).uniform_(0.0, self.max_ratio).item() * w)
+
+        if top > 0:
+            arr[:top, :, :] = 0
+        if bottom > 0:
+            arr[h - bottom:, :, :] = 0
+        if left > 0:
+            arr[:, :left, :] = 0
+        if right > 0:
+            arr[:, w - right:, :] = 0
+
+        return Image.fromarray(arr)
+
+
 # --- CUSTOM ROBUST DATASET ---
 class GridDataset(Dataset):
     def __init__(self, data_dir, mode='train', val_game=None, test_game='game5', data_aug=False):
@@ -64,6 +89,7 @@ class GridDataset(Dataset):
                 transforms.RandomAffine(degrees=0, translate=(0.05, 0.05), scale=(0.9, 1.1)),
                 transforms.RandomPerspective(distortion_scale=0.05, p=0.5),
                 transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02),
+                RandomBlackenEdges(max_ratio=0.25),
                 RandomGaussianBlur(p=0.1),
                 transforms.RandomAdjustSharpness(sharpness_factor=2.0, p=0.05),
                 transforms.ToTensor(),
