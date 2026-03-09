@@ -21,18 +21,61 @@ CHAR_TO_PIECE12 = {'P': 0, 'N': 1, 'B': 2, 'R': 3, 'Q': 4, 'K': 5,
                    'p': 6, 'n': 7, 'b': 8, 'r': 9, 'q': 10, 'k': 11}
 CHAR_TO_PIECE6 = {'p': 0, 'n': 1, 'b': 2, 'r': 3, 'q': 4, 'k': 5}
 
+
+class AddGaussianNoise:
+    def __init__(self, sigma_min=0.0, sigma_max=0.02, p=0.1):
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+        self.p = p
+
+    def __call__(self, tensor):
+        if torch.rand(1).item() < self.p:
+            sigma = torch.empty(1).uniform_(self.sigma_min, self.sigma_max).item()
+            noise = torch.randn_like(tensor) * sigma
+            tensor = torch.clamp(tensor + noise, 0.0, 1.0)
+        return tensor
+
+
+class RandomGaussianBlur:
+    def __init__(self, p=0.1):
+        self.p = p
+        self.blur3 = transforms.GaussianBlur(kernel_size=3)
+        self.blur5 = transforms.GaussianBlur(kernel_size=5)
+
+    def __call__(self, img):
+        if torch.rand(1).item() < self.p:
+            if torch.rand(1).item() < 0.5:
+                return self.blur3(img)
+            return self.blur5(img)
+        return img
+
+
 # --- CUSTOM ROBUST DATASET ---
 class GridDataset(Dataset):
-    def __init__(self, data_dir, mode='train', val_game=None, test_game='game5'):
+    def __init__(self, data_dir, mode='train', val_game=None, test_game='game5', data_aug=False):
         self.data_dir = data_dir
         self.samples = []
         self.all_labels = []
 
-        self.transform = transforms.Compose([
-            transforms.Resize((96, 96)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        if mode == 'train' and data_aug:
+            self.transform = transforms.Compose([
+                transforms.Resize((96, 96)),
+                transforms.RandomRotation(degrees=5),
+                transforms.RandomAffine(degrees=0, translate=(0.05, 0.05), scale=(0.9, 1.1)),
+                transforms.RandomPerspective(distortion_scale=0.05, p=0.5),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02),
+                RandomGaussianBlur(p=0.1),
+                transforms.RandomAdjustSharpness(sharpness_factor=2.0, p=0.05),
+                transforms.ToTensor(),
+                AddGaussianNoise(sigma_min=0.0, sigma_max=0.02, p=0.1),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+        else:
+            self.transform = transforms.Compose([
+                transforms.Resize((96, 96)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
 
         games = [d for d in os.listdir(data_dir) if d.startswith('game') and os.path.isdir(os.path.join(data_dir, d))]
 
@@ -318,11 +361,12 @@ def main():
     loss_opts = ['ce', 'focal']
     smoothing_opts = [True, False]
     freezing_opts = [True, False]
+    data_aug_opts = [True, False]
 
 
     all_combinations = list(
         itertools.product(
-            heads_opts, sample_opts, triplet_opts, batch_size_opts, loss_opts, smoothing_opts, freezing_opts
+            heads_opts, sample_opts, triplet_opts, batch_size_opts, loss_opts, smoothing_opts, freezing_opts, data_aug_opts
         )
     )
     todo = all_combinations
@@ -330,9 +374,9 @@ def main():
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
-    for combination_idx, (heads, sampling, triplet_mode, batch_size, loss_name, smoothing, freezing) in enumerate(todo, 1):
+    for combination_idx, (heads, sampling, triplet_mode, batch_size, loss_name, smoothing, freezing, data_aug) in enumerate(todo, 1):
         config_name = (
-            f"H{heads}_S-{sampling}_T-{triplet_mode}_B-{batch_size}_L-{loss_name}_SM-{smoothing}_F-{freezing}"
+            f"H{heads}_S-{sampling}_T-{triplet_mode}_B-{batch_size}_L-{loss_name}_SM-{smoothing}_F-{freezing}_DA-{data_aug}"
         )
         print(f"\n{'=' * 60}\nModel {combination_idx}/{len(todo)}: {config_name}\n{'=' * 60}")
 
@@ -344,7 +388,7 @@ def main():
 
         for val_game in all_games:
             print(f"\n--- Fold: Validating on {val_game} ---")
-            train_ds = GridDataset(data_dir, mode='train', val_game=val_game)
+            train_ds = GridDataset(data_dir, mode='train', val_game=val_game, data_aug=data_aug)
             val_ds = GridDataset(data_dir, mode='val', val_game=val_game)
             if len(train_ds) == 0:
                 print(f"Skipping {val_game} (No training data found)")
@@ -487,6 +531,7 @@ def main():
             "Loss": loss_name,
             "Label Smoothing": smoothing,
             "Freezing": freezing,
+            "Data Augmentation": data_aug,
             "Mean 4-Fold F1": mean_cv_f1,
             "Ensemble Test F1 (game5)": ensemble_test_f1,
             "Epochs game2": fold_epochs.get('game2', 0),
