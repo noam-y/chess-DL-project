@@ -168,7 +168,7 @@ class ConfigurableChessResNet(nn.Module):
 
 # --- EARLY STOPPING ---
 class EarlyStopping:
-    def __init__(self, patience=2, min_delta=0.0):
+    def __init__(self, patience=15, min_delta=0.0):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -520,7 +520,7 @@ def main():
             final_epoch = 0
 
             # MAIN EVENT: Up to 100 epochs
-            for epoch in range(1):
+            for epoch in range(100):
                 current_epoch = epoch + 1
                 apply_freezing_schedule(model, freezing, epoch_num=current_epoch)
                 final_epoch = epoch + 1
