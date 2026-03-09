@@ -326,7 +326,7 @@ def main():
     total_combinations = len(todo)
 
     # 1. Retrieve and parse SLURM_ARRAY_TASK_ID
-    task_id_str = sys.getenv('SLURM_ARRAY_TASK_ID')
+    task_id_str = os.getenv('SLURM_ARRAY_TASK_ID')
     if task_id_str is None:
         raise EnvironmentError("SLURM_ARRAY_TASK_ID not found. Script must be executed via sbatch array.")
 
