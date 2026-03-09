@@ -114,7 +114,7 @@ class ChessPatchesDataset(Dataset):
                 bad_row = self.full_df.iloc[idx]
                 print(f"\nCRITICAL DEBUG INFO:")
                 print(f"Index: {idx}")
-                print(f"Source CSV: {bad_row.get('source_csv', 'Unknown')}")  # זה יגלה את הסוד!
+                print(f"Source CSV: {bad_row.get('source_csv', 'Unknown')}") # זה יגלה את הסוד!
                 print(f"Frame ID: {bad_row.get('from_frame', 'Unknown')}")
                 print(f"Looking for file: {img_path}")
             return None
@@ -167,13 +167,13 @@ def main(args):
         num_workers=4  # יעיל יותר בקלאסטר
     )
 
-    # Model, Loss, Optimizer
+# Model, Loss, Optimizer
     model = PieceClassifier(num_classes=13).to(device)
 
-    class_weights = torch.ones(13)
-
+    class_weights = torch.ones(13) 
+    
     # low weight for empty class to reduce its influence relative to pieces
-    class_weights[0] = 0.1
+    class_weights[0] = 0.1 
     class_weights = class_weights.to(device)
 
     criterion = nn.CrossEntropyLoss(weight=class_weights)
@@ -239,6 +239,35 @@ def main(args):
         # הדפסת מטריצת בלבול (שורות=אמת, עמודות=חיזוי)
         print("Confusion Matrix (Row=True, Col=Pred):")
         print(confusion_matrix(all_targets, all_preds))
+
+
+            # נאסוף את כל התחזיות של האפוק האחרון
+    all_preds = []
+    all_targets = []
+
+    model.eval() # חשוב! כדי לנטרל Dropout
+    with torch.no_grad():
+        for batch_data in train_loader:
+            if batch_data is None: continue
+            boards, labels = batch_data
+            inputs = boards.view(-1, 3, 60, 60).to(device)
+            targets = labels.view(-1).to(device)
+            
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs.data, 1)
+            
+            all_preds.extend(predicted.cpu().numpy())
+            all_targets.extend(targets.cpu().numpy())
+
+        # הדפסת דוח מפורט
+        # Target names: 0=Empty, 1=P, 2=N, etc... (לפי המילון שלך)
+        print("\nDetailed Report:")
+        print(classification_report(all_targets, all_preds, zero_division=0))
+
+        # הדפסת מטריצת בלבול (שורות=אמת, עמודות=חיזוי)
+        print("Confusion Matrix (Row=True, Col=Pred):")
+        print(confusion_matrix(all_targets, all_preds))
+
 
         # סוף אפוק - הדפסה ושמירה
         epoch_loss = running_loss / len(train_loader)
