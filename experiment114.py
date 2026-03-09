@@ -168,7 +168,7 @@ class ConfigurableChessResNet(nn.Module):
 
 # --- EARLY STOPPING ---
 class EarlyStopping:
-    def __init__(self, patience=15, min_delta=0.0):
+    def __init__(self, patience=2, min_delta=0.0):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -448,21 +448,21 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, device, test_au
 # --- MAIN GRID SEARCH ---
 def main():
     data_dir = "assets/new_dataset"
-    output_base = "experiment114_results_occ_white_black_nofreeze"
+    output_base = "brand_new_experiment_results"
     os.makedirs(output_base, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Starting grid search on {device}...")
 
     heads_opts = [2, 1]
-    sample_opts = ['50_50']
-    triplet_opts = ['new', 'old', 'none']
-    batch_size_opts = [64]
-    loss_opts = ['ce', 'focal']
-    smoothing_opts = [True, False]
-    freezing_opts = [True, False]
-    data_aug_opts = [True, False]
     test_aug_opts = [True, False]
+    sample_opts = ['50_50']
+    freezing_opts = [True, False]
+    triplet_opts = ['new', 'none']
+    batch_size_opts = [64]
+    loss_opts = ['focal', 'ce']
+    smoothing_opts = [True, False]
+    data_aug_opts = [True, False]
     metric_weight_opts = [0.5]
 
 
