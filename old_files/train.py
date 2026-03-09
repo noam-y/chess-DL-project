@@ -12,6 +12,7 @@ from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
 
+
 # --- 1. Utility Functions ---
 def fen_to_tensor(fen_string):
     piece_to_id = {
@@ -32,18 +33,20 @@ def fen_to_tensor(fen_string):
                 c += 1
     return torch.from_numpy(board_tensor)
 
+
 def collate_fn_skip_none(batch):
     batch = [item for item in batch if item is not None]
     if len(batch) == 0:
         return None
     return default_collate(batch)
 
+
 # --- 2. Dataset Definition ---
 class ChessPatchesDataset(Dataset):
     def __init__(self, root_dir, transform=None):
         self.transform = transform
         self.data = []
-        
+
         # חיפוש CSV באופן רקורסיבי
         csv_files = glob.glob(os.path.join(root_dir, '**', '*.csv'), recursive=True)
         print(f"Found {len(csv_files)} CSV files in {root_dir}")
@@ -54,8 +57,8 @@ class ChessPatchesDataset(Dataset):
                 continue
             try:
                 game_folder = os.path.dirname(csv_path)
-                images_dir = os.path.join(game_folder, 'tagged_images') 
-                
+                images_dir = os.path.join(game_folder, 'tagged_images')
+
                 if not os.path.exists(images_dir):
                     continue
 
@@ -89,21 +92,21 @@ class ChessPatchesDataset(Dataset):
 
             img_name = f"frame_{frame_id:06d}.jpg"
             img_path = os.path.join(img_dir, img_name)
-            
+
             image = Image.open(img_path).convert("RGB")
             label_board = fen_to_tensor(fen_label)
 
             # Preprocessing
             image = self.resize(image)
-            image = self.to_tensor(image) # (3, 480, 480)
+            image = self.to_tensor(image)  # (3, 480, 480)
 
             # Cutting to patches
             patch_size = 60
             patches = image.unfold(1, patch_size, patch_size).unfold(2, patch_size, patch_size)
             patches = patches.permute(1, 2, 0, 3, 4).contiguous().view(-1, 3, patch_size, patch_size)
-            
+
             labels = label_board.view(-1)
-            
+
             return patches, labels
 
         except Exception as e:
@@ -115,6 +118,7 @@ class ChessPatchesDataset(Dataset):
                 print(f"Frame ID: {bad_row.get('from_frame', 'Unknown')}")
                 print(f"Looking for file: {img_path}")
             return None
+
 
 # --- 3. Model Definition ---
 class PieceClassifier(nn.Module):
@@ -139,6 +143,7 @@ class PieceClassifier(nn.Module):
         x = self.fc(x)
         return x
 
+
 # --- 4. Main Training Function ---
 def main(args):
     # הגדרת Device
@@ -155,11 +160,11 @@ def main(args):
         return
 
     train_loader = DataLoader(
-        dataset, 
-        batch_size=args.batch_size, 
-        shuffle=True, 
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
         collate_fn=collate_fn_skip_none,
-        num_workers=4 # יעיל יותר בקלאסטר
+        num_workers=4  # יעיל יותר בקלאסטר
     )
 
 # Model, Loss, Optimizer
@@ -181,16 +186,16 @@ def main(args):
         running_loss = 0.0
         correct = 0
         total = 0
-        
-        loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
-        
+
+        loop = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}")
+
         for batch_data in loop:
             if batch_data is None:
                 continue
-            
+
             # Unpacking (התיקון החשוב)
             boards, labels = batch_data
-            
+
             # Reshape for training
             inputs = boards.view(-1, 3, 60, 60).to(device)
             targets = labels.view(-1).to(device)
@@ -205,8 +210,35 @@ def main(args):
             _, predicted = torch.max(outputs.data, 1)
             total += targets.size(0)
             correct += (predicted == targets).sum().item()
-            
-            loop.set_postfix(loss=loss.item(), acc=100.*correct/total)
+
+            loop.set_postfix(loss=loss.item(), acc=100. * correct / total)
+
+            # נאסוף את כל התחזיות של האפוק האחרון
+    all_preds = []
+    all_targets = []
+
+    model.eval()  # חשוב! כדי לנטרל Dropout
+    with torch.no_grad():
+        for batch_data in train_loader:
+            if batch_data is None: continue
+            boards, labels = batch_data
+            inputs = boards.view(-1, 3, 60, 60).to(device)
+            targets = labels.view(-1).to(device)
+
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs.data, 1)
+
+            all_preds.extend(predicted.cpu().numpy())
+            all_targets.extend(targets.cpu().numpy())
+
+        # הדפסת דוח מפורט
+        # Target names: 0=Empty, 1=P, 2=N, etc... (לפי המילון שלך)
+        print("\nDetailed Report:")
+        print(classification_report(all_targets, all_preds, zero_division=0))
+
+        # הדפסת מטריצת בלבול (שורות=אמת, עמודות=חיזוי)
+        print("Confusion Matrix (Row=True, Col=Pred):")
+        print(confusion_matrix(all_targets, all_preds))
 
 
             # נאסוף את כל התחזיות של האפוק האחרון
@@ -240,10 +272,10 @@ def main(args):
         # סוף אפוק - הדפסה ושמירה
         epoch_loss = running_loss / len(train_loader)
         epoch_acc = 100. * correct / total
-        print(f"Epoch {epoch+1} Summary: Loss={epoch_loss:.4f}, Accuracy={epoch_acc:.2f}%")
-        
+        print(f"Epoch {epoch + 1} Summary: Loss={epoch_loss:.4f}, Accuracy={epoch_acc:.2f}%")
+
         # שמירת המודל בכל אפוק (או רק בסוף)
-        save_path = os.path.join(args.output_dir, f"model_epoch_{epoch+1}.pth")
+        save_path = os.path.join(args.output_dir, f"model_epoch_{epoch + 1}.pth")
         torch.save(model.state_dict(), save_path)
         print(f"Model saved to {save_path}")
 
@@ -251,16 +283,16 @@ def main(args):
 if __name__ == "__main__":
     # הגדרת הפרמטרים שהסקריפט יודע לקבל מבחוץ
     parser = argparse.ArgumentParser(description="Train Chess Piece Classifier")
-    
+
     # נתיבים
     parser.add_argument("--data_dir", type=str, required=True, help="Path to the labeled_data folder")
     parser.add_argument("--output_dir", type=str, default="./checkpoints", help="Where to save the model")
-    
+
     # היפר-פרמטרים
     parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size (number of boards)")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
 
     args = parser.parse_args()
-    
+
     main(args)
