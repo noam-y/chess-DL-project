@@ -262,8 +262,8 @@ def build_test_time_aug_batches(inputs):
         aug_color_rot.append(torch.clamp(img_aug, 0.0, 1.0))
 
     aug_color_rot = normalize_batch(torch.stack(aug_color_rot, dim=0))
-    aug_black_edges = normalize_batch(blacken_edges_tensor(denorm, edge_ratio=0.25))
-    return [inputs, aug_color_rot, aug_black_edges]
+    aug_hflip = normalize_batch(torch.flip(denorm, dims=[3]))
+    return [inputs, aug_color_rot, aug_hflip]
 
 
 def unified_probs_from_outputs(model, inputs, heads):
@@ -579,7 +579,9 @@ def main():
                         boards, chars = batch
                         inputs = boards.to(device)
                         t_unified, _, _, _, _ = chars_to_tensors(chars, device)
-                        unified_probs = infer_unified_probs(model, inputs, heads, test_aug=test_aug)
+                        # Keep validation fast/consistent for scheduler + early stopping.
+                        # TTA is only used in the final saved-model evaluation.
+                        unified_probs = infer_unified_probs(model, inputs, heads, test_aug=False)
                         preds = torch.argmax(unified_probs, dim=1)
 
                         all_preds.extend(preds.cpu().numpy())
