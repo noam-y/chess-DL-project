@@ -168,7 +168,7 @@ class ConfigurableChessResNet(nn.Module):
 
 # --- EARLY STOPPING ---
 class EarlyStopping:
-    def __init__(self, patience=50, min_delta=0.0):
+    def __init__(self, patience=15, min_delta=0.0):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -512,7 +512,7 @@ def main():
             apply_freezing_schedule(model, freezing, epoch_num=1)
             optimizer = build_optimizer(model, freezing, head_lr=1e-4, backbone_lr=1e-5, weight_decay=1e-4)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
-            early_stopping = EarlyStopping(patience=40)
+            early_stopping = EarlyStopping()
 
             best_fold_f1 = 0.0
             final_epoch = 0
