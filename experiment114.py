@@ -463,6 +463,7 @@ def main():
     freezing_opts = [True, False]
     data_aug_opts = [True, False]
     test_aug_opts = [True, False]
+    metric_weight_opts = [0.5]
 
 
     all_combinations = list(
@@ -475,7 +476,8 @@ def main():
             smoothing_opts,
             freezing_opts,
             data_aug_opts,
-            test_aug_opts
+            test_aug_opts,
+            metric_weight_opts
         )
     )
     todo = all_combinations
@@ -483,9 +485,9 @@ def main():
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
-    for combination_idx, (heads, sampling, triplet_mode, batch_size, loss_name, smoothing, freezing, data_aug, test_aug) in enumerate(todo, 1):
+    for combination_idx, (heads, sampling, triplet_mode, batch_size, loss_name, smoothing, freezing, data_aug, test_aug, metric_weight) in enumerate(todo, 1):
         config_name = (
-            f"H{heads}_S-{sampling}_T-{triplet_mode}_B-{batch_size}_L-{loss_name}_SM-{smoothing}_F-{freezing}_DA-{data_aug}_TA-{test_aug}"
+            f"H{heads}_S-{sampling}_T-{triplet_mode}_B-{batch_size}_L-{loss_name}_SM-{smoothing}_F-{freezing}_DA-{data_aug}_TA-{test_aug}_MW-{metric_weight}"
         )
         print(f"\n{'=' * 60}\nModel {combination_idx}/{len(todo)}: {config_name}\n{'=' * 60}")
 
@@ -537,9 +539,9 @@ def main():
                         out_main, features = model(inputs)
                         total_loss += classification_loss(loss_name, out_main, t_unified, smoothing=smoothing)
                         if triplet_mode == "old":
-                            total_loss += calculate_triplet_loss(features, t_unified, mask, device)
+                            total_loss += metric_weight * calculate_triplet_loss(features, t_unified, mask, device)
                         elif triplet_mode == "new":
-                            total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                            total_loss += metric_weight * calculate_multi_similarity_loss(features, t_piece12, mask, device)
                     elif heads == 2:
                         out_occ, out_piece, features = model(inputs)
                         total_loss += classification_loss(loss_name, out_occ, t_occ, smoothing=smoothing)
@@ -548,9 +550,9 @@ def main():
                                 loss_name, out_piece[mask], t_piece12[mask], smoothing=smoothing
                             )
                         if triplet_mode == "old":
-                            total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                            total_loss += metric_weight * calculate_triplet_loss(features, t_piece12, mask, device)
                         elif triplet_mode == "new":
-                            total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                            total_loss += metric_weight * calculate_multi_similarity_loss(features, t_piece12, mask, device)
                     elif heads == 3:
                         out_occ, out_white_piece, out_black_piece, features = model(inputs)
                         mask_white = mask & (t_color == 1)
@@ -565,11 +567,11 @@ def main():
                                 loss_name, out_black_piece[mask_black], t_piece6[mask_black], smoothing=smoothing
                             )
                         if triplet_mode == "old":
-                            total_loss += calculate_triplet_loss(features, t_piece6, mask_white, device)
-                            total_loss += calculate_triplet_loss(features, t_piece6, mask_black, device)
+                            total_loss += metric_weight * calculate_triplet_loss(features, t_piece6, mask_white, device)
+                            total_loss += metric_weight * calculate_triplet_loss(features, t_piece6, mask_black, device)
                         elif triplet_mode == "new":
-                            total_loss += calculate_multi_similarity_loss(features, t_piece6, mask_white, device)
-                            total_loss += calculate_multi_similarity_loss(features, t_piece6, mask_black, device)
+                            total_loss += metric_weight * calculate_multi_similarity_loss(features, t_piece6, mask_white, device)
+                            total_loss += metric_weight * calculate_multi_similarity_loss(features, t_piece6, mask_black, device)
 
 
                     total_loss.backward()
@@ -630,6 +632,7 @@ def main():
             "Freezing": freezing,
             "Data Augmentation": data_aug,
             "Test-Time Augmentation": test_aug,
+            "Metric Weight": metric_weight,
             "Mean 4-Fold F1": mean_cv_f1,
             "Ensemble Test F1 (game5)": ensemble_test_f1,
             "Epochs game2": fold_epochs.get('game2', 0),
