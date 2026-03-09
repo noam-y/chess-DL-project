@@ -10,11 +10,11 @@
 #SBATCH --mem=24G
 
 # Load the cluster's Anaconda module
-module load anaconda [cite: 79]
+module load anaconda
 
 # Activate your specific environment
 # Ensure the environment is deactivated on the manager node before sbatch [cite: 52]
-source activate chess_env [cite: 80]
+source activate chess_env
 
 # Run the grid search with unbuffered output
 # -u is used to watch live progress and prevent buffered printing [cite: 801, 805]
