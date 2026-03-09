@@ -17,4 +17,4 @@ source activate chess_env [cite: 80]
 
 # Run the grid search with unbuffered output
 # -u is used to watch live progress and prevent buffered printing [cite: 801, 805]
-python -u experiment2.py
+python -u experiment114.py
