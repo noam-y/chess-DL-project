@@ -520,7 +520,7 @@ def main():
             final_epoch = 0
 
             # MAIN EVENT: Up to 100 epochs
-            for epoch in range(100):
+            for epoch in range(1):
                 current_epoch = epoch + 1
                 apply_freezing_schedule(model, freezing, epoch_num=current_epoch)
                 final_epoch = epoch + 1
