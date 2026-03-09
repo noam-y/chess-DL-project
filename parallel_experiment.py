@@ -1,3 +1,4 @@
+import sys
 import os
 import torch
 import torch.nn as nn
@@ -302,11 +303,10 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device)
 # --- MAIN GRID SEARCH ---
 def main():
     data_dir = "assets/new_dataset"
-    output_base = "experiment114_results"
+    output_base = "parallel_results"
     os.makedirs(output_base, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Starting 72-Combination Grid Search on {device}...")
 
     heads_opts = [2, 3]
     sample_opts = ['50_50']
@@ -314,168 +314,180 @@ def main():
     freeze_opts = [True, False]
     batch_size_opts = [16, 32]
 
-    combs = [[1, '50_50', 'old', True, 32],  # og number 1 seed
-             [1, '50_50', 'new', True, 16],  # my improvment
-             [3, '50_50', 'old', False, 32], # og number 2 seed
-             [3, '50_50', 'new', True, 16],  # my improvment
-             [1, 'none', 'old', False, 32],  # og number 3 seed
-             [2, '50_50', 'new', True, 16]]  # my guess
+    combs = [[1, '50_50', 'old', True, 32],
+             [1, '50_50', 'new', True, 16],
+             [3, '50_50', 'old', False, 32],
+             [3, '50_50', 'new', True, 16],
+             [1, 'none', 'old', False, 32],
+             [2, '50_50', 'new', True, 16]]
 
     all_combinations = list(itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts))
     todo = all_combinations + combs
+    total_combinations = len(todo)
+
+    # 1. Retrieve and parse SLURM_ARRAY_TASK_ID
+    task_id_str = sys.getenv('SLURM_ARRAY_TASK_ID')
+    if task_id_str is None:
+        raise EnvironmentError("SLURM_ARRAY_TASK_ID not found. Script must be executed via sbatch array.")
+
+    # Adjust for 0-based indexing (assuming #SBATCH --array=1-14 is used)
+    task_idx = int(task_id_str) - 1
+
+    if task_idx < 0 or task_idx >= total_combinations:
+        raise IndexError(f"Task ID {task_idx + 1} exceeds available combinations ({total_combinations}).")
+
+    # 2. Extract specific parameters for this node
+    heads, sampling, triplet_mode, freeze, batch_size = todo[task_idx]
 
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
-    for combination_idx, (heads, sampling, triplet_mode, freeze, batch_size) in enumerate(todo, 1):
-            # enumerate(itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts), 1)):
-        config_name = f"H{heads}_S-{sampling}_T-{triplet_mode}_F-{freeze}_B-{batch_size}"
-        print(f"\n{'=' * 60}\nModel {combination_idx}/72: {config_name}\n{'=' * 60}")
+    # 3. Outer loop removed. Execution proceeds for single configuration.
+    config_name = f"H{heads}_S-{sampling}_T-{triplet_mode}_F-{freeze}_B-{batch_size}"
+    print(f"\n{'=' * 60}\nRunning Combination {task_idx + 1}/{total_combinations}: {config_name}\n{'=' * 60}")
 
-        config_dir = os.path.join(output_base, config_name)
-        os.makedirs(config_dir, exist_ok=True)
-        fold_f1_scores = []
-        fold_epochs = {}
-        fold_scores = {}
+    config_dir = os.path.join(output_base, config_name)
+    os.makedirs(config_dir, exist_ok=True)
+    fold_f1_scores = []
+    fold_epochs = {}
+    fold_scores = {}
 
-        for val_game in all_games:
-            print(f"\n--- Fold: Validating on {val_game} ---")
-            train_ds = GridDataset(data_dir, mode='train', val_game=val_game)
-            val_ds = GridDataset(data_dir, mode='val', val_game=val_game)
-            if len(train_ds) == 0:
-                print(f"Skipping {val_game} (No training data found)")
-                continue
+    for val_game in all_games:
+        print(f"\n--- Fold: Validating on {val_game} ---")
+        train_ds = GridDataset(data_dir, mode='train', val_game=val_game)
+        val_ds = GridDataset(data_dir, mode='val', val_game=val_game)
+        if len(train_ds) == 0:
+            print(f"Skipping {val_game} (No training data found)")
+            continue
 
-            sampler = get_sampler(sampling, train_ds.all_labels)
-            train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, shuffle=(sampler is None),
-                                      num_workers=4, collate_fn=custom_collate)
-            val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=4, collate_fn=custom_collate)
+        sampler = get_sampler(sampling, train_ds.all_labels)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, shuffle=(sampler is None),
+                                  num_workers=4, collate_fn=custom_collate)
+        val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=4, collate_fn=custom_collate)
 
-            model = ConfigurableChessResNet(heads, freeze).to(device)
-            optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.0001, weight_decay=1e-4)
-            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
-            early_stopping = EarlyStopping(patience=40)
+        model = ConfigurableChessResNet(heads, freeze).to(device)
+        optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.0001, weight_decay=1e-4)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
+        early_stopping = EarlyStopping(patience=40)
 
-            best_fold_f1 = 0.0
-            final_epoch = 0
+        best_fold_f1 = 0.0
+        final_epoch = 0
 
-            # MAIN EVENT: Up to 100 epochs
-            for epoch in range(100):
-                final_epoch = epoch + 1
-                progressive_unfreeze(model, epoch, optimizer)
-                model.train()
-                freeze_batchnorm_for_frozen_layers(model)
-                for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1} Train", leave=False):
+        # MAIN EVENT: Up to 100 epochs
+        for epoch in range(100):
+            final_epoch = epoch + 1
+            progressive_unfreeze(model, epoch, optimizer)
+            model.train()
+            freeze_batchnorm_for_frozen_layers(model)
+            for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1} Train", leave=False):
+                if batch is None: continue
+                boards, chars = batch
+                inputs = boards.to(device)
+                t_unified, t_occ, t_color, t_piece12, t_piece6 = chars_to_tensors(chars, device)
+
+                optimizer.zero_grad()
+                total_loss = torch.tensor(0.0, device=device)
+                mask = (t_occ == 1)
+
+                if heads == 1:
+                    out_main, features = model(inputs)
+                    total_loss += nn.CrossEntropyLoss()(out_main, t_unified)
+                    if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_unified, mask, device)
+                    else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                elif heads == 2:
+                    out_occ, out_piece, features = model(inputs)
+                    total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
+                    if mask.sum() > 0: total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece12[mask])
+                    if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                    else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                elif heads == 3:
+                    out_occ, out_color, out_piece, features = model(inputs)
+                    total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
+                    if mask.sum() > 0:
+                        total_loss += nn.CrossEntropyLoss()(out_color[mask], t_color[mask])
+                        total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece6[mask])
+                    if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                    else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+
+
+                total_loss.backward()
+                optimizer.step()
+
+            model.eval()
+            all_preds, all_targets = [], []
+            with torch.no_grad():
+                for batch in val_loader:
                     if batch is None: continue
                     boards, chars = batch
                     inputs = boards.to(device)
                     t_unified, t_occ, t_color, t_piece12, t_piece6 = chars_to_tensors(chars, device)
 
-                    optimizer.zero_grad()
-                    total_loss = torch.tensor(0.0, device=device)
-                    mask = (t_occ == 1)
-
                     if heads == 1:
-                        out_main, features = model(inputs)
-                        total_loss += nn.CrossEntropyLoss()(out_main, t_unified)
-                        if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_unified, mask, device)
-                        else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                        out_main, _ = model(inputs)
+                        preds = torch.argmax(out_main, 1)
                     elif heads == 2:
-                        out_occ, out_piece, features = model(inputs)
-                        total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
-                        if mask.sum() > 0: total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece12[mask])
-                        if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
-                        else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                        out_occ, out_piece, _ = model(inputs)
+                        preds = torch.where(torch.argmax(out_occ, 1) == 0, 0, torch.argmax(out_piece, 1) + 1)
                     elif heads == 3:
-                        out_occ, out_color, out_piece, features = model(inputs)
-                        total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
-                        if mask.sum() > 0:
-                            total_loss += nn.CrossEntropyLoss()(out_color[mask], t_color[mask])
-                            total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece6[mask])
-                        if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
-                        else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                        out_occ, out_color, out_piece, _ = model(inputs)
+                        p_occ, p_color, p_piece6 = torch.argmax(out_occ, 1), torch.argmax(out_color, 1), torch.argmax(out_piece, 1)
+                        preds = torch.where(p_occ == 0, 0, torch.where(p_color == 1, p_piece6 + 1, p_piece6 + 7))
 
+                    all_preds.extend(preds.cpu().numpy())
+                    all_targets.extend(t_unified.cpu().numpy())
 
-                    total_loss.backward()
-                    optimizer.step()
+            val_f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0) * 100
+            print(
+                f"   Epoch {epoch + 1}: "
+                f"Val F1={val_f1:.2f}% | "
+            )
+            scheduler.step(val_f1)
 
-                model.eval()
-                all_preds, all_targets = [], []
-                with torch.no_grad():
-                    for batch in val_loader:
-                        if batch is None: continue
-                        boards, chars = batch
-                        inputs = boards.to(device)
-                        t_unified, t_occ, t_color, t_piece12, t_piece6 = chars_to_tensors(chars, device)
+            if val_f1 > best_fold_f1:
+                best_fold_f1 = val_f1
+                torch.save(model.state_dict(), os.path.join(config_dir, f"best_{val_game}.pth"))
 
-                        if heads == 1:
-                            out_main, _ = model(inputs)
-                            preds = torch.argmax(out_main, 1)
-                        elif heads == 2:
-                            out_occ, out_piece, _ = model(inputs)
-                            preds = torch.where(torch.argmax(out_occ, 1) == 0, 0, torch.argmax(out_piece, 1) + 1)
-                        elif heads == 3:
-                            out_occ, out_color, out_piece, _ = model(inputs)
-                            p_occ, p_color, p_piece6 = torch.argmax(out_occ, 1), torch.argmax(out_color, 1), torch.argmax(out_piece, 1)
-                            preds = torch.where(p_occ == 0, 0, torch.where(p_color == 1, p_piece6 + 1, p_piece6 + 7))
+            early_stopping(val_f1)
+            if early_stopping.early_stop:
+                print(f"   -> Early stopping triggered at epoch {epoch + 1} (Best F1: {best_fold_f1:.2f}%)")
+                break
 
-                        all_preds.extend(preds.cpu().numpy())
-                        all_targets.extend(t_unified.cpu().numpy())
+        fold_epochs[val_game] = final_epoch
+        fold_scores[val_game] = best_fold_f1
+        fold_f1_scores.append(best_fold_f1)
 
-                val_f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0) * 100
-                print(
-                    f"   Epoch {epoch + 1}: "
-                    f"Val F1={val_f1:.2f}% | "
-                )
-                scheduler.step(val_f1)
+    mean_cv_f1 = np.mean(fold_f1_scores) if fold_f1_scores else 0
+    print(f"\n>>> Configuration [{config_name}] Mean 4-Fold CV F1: {mean_cv_f1:.2f}%")
 
-                if val_f1 > best_fold_f1:
-                    best_fold_f1 = val_f1
-                    torch.save(model.state_dict(), os.path.join(config_dir, f"best_{val_game}.pth"))
+    # --- ENSEMBLE EVALUATION ---
+    print(f">>> Running 4-Model Ensemble Evaluation on game5...")
+    ensemble_test_f1 = evaluate_ensemble_on_test(config_dir, "game5", heads, freeze, device)
+    print(f">>> FINAL UNSEEN TEST F1: {ensemble_test_f1:.2f}%")
 
-                early_stopping(val_f1)
-                if early_stopping.early_stop:
-                    print(f"   -> Early stopping triggered at epoch {epoch + 1} (Best F1: {best_fold_f1:.2f}%)")
-                    break
-
-            fold_epochs[val_game] = final_epoch
-            fold_scores[val_game] = best_fold_f1
-            fold_f1_scores.append(best_fold_f1)
-
-        mean_cv_f1 = np.mean(fold_f1_scores) if fold_f1_scores else 0
-        print(f"\n>>> Configuration [{config_name}] Mean 4-Fold CV F1: {mean_cv_f1:.2f}%")
-
-        # --- ENSEMBLE EVALUATION ---
-        print(f">>> Running 4-Model Ensemble Evaluation on game5...")
-        ensemble_test_f1 = evaluate_ensemble_on_test(config_dir, "game5", heads, freeze, device)
-        print(f">>> FINAL UNSEEN TEST F1: {ensemble_test_f1:.2f}%")
-
-        results.append({
-            "Config ID": config_name,
-            "Heads": heads,
-            "Sampling": sampling,
-            "Triplet Loss": triplet_mode,
-            "Freeze Backbone": freeze,
-            "Batch Size": batch_size,
-            "Mean 4-Fold F1": mean_cv_f1,
-            "Ensemble Test F1 (game5)": ensemble_test_f1,
-            "Epochs game2": fold_epochs.get('game2', 0),
-            "Best F1 game2": fold_scores.get('game2', 0),
-            "Epochs game4": fold_epochs.get('game4', 0),
-            "Best F1 game4": fold_scores.get('game4', 0),
-            "Epochs game6": fold_epochs.get('game6', 0),
-            "Best F1 game6": fold_scores.get('game6', 0),
-            "Epochs game7": fold_epochs.get('game7', 0),
-            "Best F1 game7": fold_scores.get('game7', 0)
-        })
-        pd.DataFrame(results).to_csv(os.path.join(output_base, "running_results_exp_114.csv"), index=False)
-
-    print(
-        "\n=============================================\nALL 72 PERMUTATIONS COMPLETE!\n=============================================")
-    final_df = pd.DataFrame(results).sort_values(by="Ensemble Test F1 (game5)", ascending=False)
-    final_df.to_csv(os.path.join(output_base, "FINAL_RESULTS_114.csv"), index=False)
-    print(final_df.to_string(index=False))
-
+    results.append({
+        "Config ID": config_name,
+        "Heads": heads,
+        "Sampling": sampling,
+        "Triplet Loss": triplet_mode,
+        "Freeze Backbone": freeze,
+        "Batch Size": batch_size,
+        "Mean 4-Fold F1": mean_cv_f1,
+        "Ensemble Test F1 (game5)": ensemble_test_f1,
+        "Epochs game2": fold_epochs.get('game2', 0),
+        "Best F1 game2": fold_scores.get('game2', 0),
+        "Epochs game4": fold_epochs.get('game4', 0),
+        "Best F1 game4": fold_scores.get('game4', 0),
+        "Epochs game6": fold_epochs.get('game6', 0),
+        "Best F1 game6": fold_scores.get('game6', 0),
+        "Epochs game7": fold_epochs.get('game7', 0),
+        "Best F1 game7": fold_scores.get('game7', 0)
+    })
+    # Replaces the shared running_results_exp_114.csv output
+    task_csv_name = f"results_task_{task_id_str}.csv"
+    pd.DataFrame(results).to_csv(os.path.join(output_base, task_csv_name), index=False)
+    print(f"\n=============================================")
+    print(f"TASK {task_id_str} COMPLETE. Results saved to {task_csv_name}.")
+    print(f"=============================================")
 
 if __name__ == "__main__":
     main()
