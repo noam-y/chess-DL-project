@@ -454,10 +454,10 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Starting grid search on {device}...")
 
-    heads_opts = [2, 3]
+    heads_opts = [2, 1]
     sample_opts = ['50_50']
-    triplet_opts = ['new', 'old']
-    batch_size_opts = [32]
+    triplet_opts = ['new', 'old', 'none']
+    batch_size_opts = [64]
     loss_opts = ['ce', 'focal']
     smoothing_opts = [True, False]
     freezing_opts = [True, False]
@@ -536,8 +536,10 @@ def main():
                     if heads == 1:
                         out_main, features = model(inputs)
                         total_loss += classification_loss(loss_name, out_main, t_unified, smoothing=smoothing)
-                        if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_unified, mask, device)
-                        else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                        if triplet_mode == "old":
+                            total_loss += calculate_triplet_loss(features, t_unified, mask, device)
+                        elif triplet_mode == "new":
+                            total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
                     elif heads == 2:
                         out_occ, out_piece, features = model(inputs)
                         total_loss += classification_loss(loss_name, out_occ, t_occ, smoothing=smoothing)
@@ -545,8 +547,10 @@ def main():
                             total_loss += classification_loss(
                                 loss_name, out_piece[mask], t_piece12[mask], smoothing=smoothing
                             )
-                        if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
-                        else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                        if triplet_mode == "old":
+                            total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
+                        elif triplet_mode == "new":
+                            total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
                     elif heads == 3:
                         out_occ, out_white_piece, out_black_piece, features = model(inputs)
                         mask_white = mask & (t_color == 1)
@@ -563,7 +567,7 @@ def main():
                         if triplet_mode == "old":
                             total_loss += calculate_triplet_loss(features, t_piece6, mask_white, device)
                             total_loss += calculate_triplet_loss(features, t_piece6, mask_black, device)
-                        else:
+                        elif triplet_mode == "new":
                             total_loss += calculate_multi_similarity_loss(features, t_piece6, mask_white, device)
                             total_loss += calculate_multi_similarity_loss(features, t_piece6, mask_black, device)
 
