@@ -199,6 +199,52 @@ def classification_loss(loss_name, logits, targets, smoothing=False, smoothing_e
     return F.cross_entropy(logits, targets, label_smoothing=label_smoothing)
 
 
+def apply_freezing_schedule(model, freezing, epoch_num):
+    if not freezing:
+        for p in model.parameters():
+            p.requires_grad = True
+        return
+
+    # Heads are always trainable.
+    for name, p in model.named_parameters():
+        if not name.startswith("backbone."):
+            p.requires_grad = True
+
+    # Epochs 1-5: freeze entire backbone.
+    for p in model.backbone.parameters():
+        p.requires_grad = False
+
+    # Epochs 6-10: unfreeze last two backbone blocks (layer3/layer4).
+    if 6 <= epoch_num <= 10:
+        for block_idx in [6, 7]:
+            for p in model.backbone[block_idx].parameters():
+                p.requires_grad = True
+
+    # Epoch 11+: unfreeze everything.
+    if epoch_num >= 11:
+        for p in model.backbone.parameters():
+            p.requires_grad = True
+
+
+def build_optimizer(model, freezing, head_lr=1e-4, backbone_lr=1e-5, weight_decay=1e-4):
+    if not freezing:
+        return optim.Adam(
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=head_lr,
+            weight_decay=weight_decay
+        )
+
+    head_params = [p for name, p in model.named_parameters() if not name.startswith("backbone.")]
+    backbone_params = list(model.backbone.parameters())
+    return optim.Adam(
+        [
+            {"params": head_params, "lr": head_lr},
+            {"params": backbone_params, "lr": backbone_lr},
+        ],
+        weight_decay=weight_decay
+    )
+
+
 # --- ENSEMBLE EVALUATOR ---
 def evaluate_ensemble_on_test(config_dir, test_game_name, heads, device):
     data_dir = "assets/new_dataset"
@@ -271,18 +317,23 @@ def main():
     batch_size_opts = [32]
     loss_opts = ['ce', 'focal']
     smoothing_opts = [True, False]
+    freezing_opts = [True, False]
 
 
     all_combinations = list(
-        itertools.product(heads_opts, sample_opts, triplet_opts, batch_size_opts, loss_opts, smoothing_opts)
+        itertools.product(
+            heads_opts, sample_opts, triplet_opts, batch_size_opts, loss_opts, smoothing_opts, freezing_opts
+        )
     )
     todo = all_combinations
 
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
-    for combination_idx, (heads, sampling, triplet_mode, batch_size, loss_name, smoothing) in enumerate(todo, 1):
-        config_name = f"H{heads}_S-{sampling}_T-{triplet_mode}_B-{batch_size}_L-{loss_name}_SM-{smoothing}"
+    for combination_idx, (heads, sampling, triplet_mode, batch_size, loss_name, smoothing, freezing) in enumerate(todo, 1):
+        config_name = (
+            f"H{heads}_S-{sampling}_T-{triplet_mode}_B-{batch_size}_L-{loss_name}_SM-{smoothing}_F-{freezing}"
+        )
         print(f"\n{'=' * 60}\nModel {combination_idx}/{len(todo)}: {config_name}\n{'=' * 60}")
 
         config_dir = os.path.join(output_base, config_name)
@@ -305,7 +356,8 @@ def main():
             val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=4, collate_fn=custom_collate)
 
             model = ConfigurableChessResNet(heads).to(device)
-            optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.0001, weight_decay=1e-4)
+            apply_freezing_schedule(model, freezing, epoch_num=1)
+            optimizer = build_optimizer(model, freezing, head_lr=1e-4, backbone_lr=1e-5, weight_decay=1e-4)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
             early_stopping = EarlyStopping(patience=40)
 
@@ -314,9 +366,11 @@ def main():
 
             # MAIN EVENT: Up to 100 epochs
             for epoch in range(100):
+                current_epoch = epoch + 1
+                apply_freezing_schedule(model, freezing, epoch_num=current_epoch)
                 final_epoch = epoch + 1
                 model.train()
-                for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1} Train", leave=False):
+                for batch in tqdm(train_loader, desc=f"Epoch {current_epoch} Train", leave=False):
                     if batch is None: continue
                     boards, chars = batch
                     inputs = boards.to(device)
@@ -398,7 +452,7 @@ def main():
 
                 val_f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0) * 100
                 print(
-                    f"   Epoch {epoch + 1}: "
+                    f"   Epoch {current_epoch}: "
                     f"Val F1={val_f1:.2f}% | "
                 )
                 scheduler.step(val_f1)
@@ -409,7 +463,7 @@ def main():
 
                 early_stopping(val_f1)
                 if early_stopping.early_stop:
-                    print(f"   -> Early stopping triggered at epoch {epoch + 1} (Best F1: {best_fold_f1:.2f}%)")
+                    print(f"   -> Early stopping triggered at epoch {current_epoch} (Best F1: {best_fold_f1:.2f}%)")
                     break
 
             fold_epochs[val_game] = final_epoch
@@ -432,6 +486,7 @@ def main():
             "Batch Size": batch_size,
             "Loss": loss_name,
             "Label Smoothing": smoothing,
+            "Freezing": freezing,
             "Mean 4-Fold F1": mean_cv_f1,
             "Ensemble Test F1 (game5)": ensemble_test_f1,
             "Epochs game2": fold_epochs.get('game2', 0),
