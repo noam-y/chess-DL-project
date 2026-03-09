@@ -72,16 +72,12 @@ def custom_collate(batch):
 
 # --- DYNAMIC CONFIGURABLE MODEL ---
 class ConfigurableChessResNet(nn.Module):
-    def __init__(self, num_heads, use_freeze):
+    def __init__(self, num_heads):
         super().__init__()
         self.num_heads = num_heads
-        self.use_freeze = use_freeze
 
         resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
         self.backbone = nn.Sequential(*list(resnet.children())[:-1])
-
-        if self.use_freeze:
-            for param in self.backbone.parameters(): param.requires_grad = False
 
         num_ftrs = resnet.fc.in_features
         if self.num_heads == 1: self.head_main = nn.Linear(num_ftrs, 13)
@@ -90,14 +86,15 @@ class ConfigurableChessResNet(nn.Module):
             self.head_piece = nn.Linear(num_ftrs, 12)
         elif self.num_heads == 3:
             self.head_occ = nn.Linear(num_ftrs, 2)
-            self.head_color = nn.Linear(num_ftrs, 2)
-            self.head_piece = nn.Linear(num_ftrs, 6)
+            self.head_white_piece = nn.Linear(num_ftrs, 6)
+            self.head_black_piece = nn.Linear(num_ftrs, 6)
 
     def forward(self, x):
         features = torch.flatten(self.backbone(x), 1)
         if self.num_heads == 1: return self.head_main(features), features
         elif self.num_heads == 2: return self.head_occ(features), self.head_piece(features), features
-        elif self.num_heads == 3: return self.head_occ(features), self.head_color(features), self.head_piece(features), features
+        elif self.num_heads == 3:
+            return self.head_occ(features), self.head_white_piece(features), self.head_black_piece(features), features
 
 # --- EARLY STOPPING ---
 class EarlyStopping:
@@ -131,31 +128,6 @@ def get_sampler(sampling_type, labels):
             else: sample_weights.append((0.5 / 12.0) / max(1, class_counts[label]))
     tensor_weights = torch.tensor(sample_weights, dtype=torch.float)
     return WeightedRandomSampler(tensor_weights, len(tensor_weights), replacement=True)
-
-def progressive_unfreeze(model, epoch, optimizer):
-    if not hasattr(model, 'use_freeze') or not model.use_freeze:
-        return
-
-        # Unfreeze one stage every 10 epochs, from deepest to earliest.
-        # backbone children for resnet18 sequential:
-        # [conv1, bn1, relu, maxpool, layer1, layer2, layer3, layer4, avgpool]
-    schedule = {
-        10: ['layer4'],
-        20: ['layer3'],
-        30: ['layer2'],
-        40: ['layer1'],
-        50: ['conv1', 'bn1'],  # relu/maxpool have no trainable parameters
-    }
-    if epoch not in schedule:
-        return
-
-    named_backbone_layers = dict(model.backbone.named_children())
-    for layer_name in schedule[epoch]:
-        layer = named_backbone_layers.get(layer_name, None)
-        if layer is None:
-            continue
-        for param in layer.parameters():
-            param.requires_grad = True
 
 def chars_to_tensors(chars, device):
     t_unified = torch.tensor([CHAR_TO_UNIFIED[c] for c in chars], dtype=torch.long, device=device)
@@ -210,43 +182,25 @@ def calculate_multi_similarity_loss(features, targets, mask, device, alpha=2.0, 
     return torch.stack(loss_terms).mean()
 
 
-def freeze_batchnorm_for_frozen_layers(model):
-    if not hasattr(model, "backbone"):
-        return
-
-    for layer in model.backbone.children():
-        layer_params = list(layer.parameters())
-        if not layer_params:
-            continue
-        layer_is_frozen = all(not p.requires_grad for p in layer_params)
-        if layer_is_frozen:
-            for module in layer.modules():
-                if isinstance(module, nn.BatchNorm2d):
-                    module.eval()
-                    if module.weight is not None:
-                        module.weight.requires_grad = False
-                    if module.bias is not None:
-                        module.bias.requires_grad = False
+def focal_loss(logits, targets, gamma=2.0, alpha=None, label_smoothing=0.0):
+    ce_loss = F.cross_entropy(logits, targets, reduction='none', label_smoothing=label_smoothing)
+    pt = torch.exp(-ce_loss)
+    focal_term = (1 - pt) ** gamma
+    if alpha is not None:
+        alpha_t = alpha.to(logits.device)[targets]
+        focal_term = alpha_t * focal_term
+    return (focal_term * ce_loss).mean()
 
 
-def build_optimizer(model, base_lr, freeze, backbone_lr_scale=0.1):
-    head_params = [p for n, p in model.named_parameters() if "backbone" not in n]
-    backbone_params = [p for n, p in model.named_parameters() if "backbone" in n]
-    if freeze:
-        for p in backbone_params:
-            p.requires_grad = False
-
-    return optim.Adam(
-        [
-            {"params": head_params, "lr": base_lr},
-            {"params": backbone_params, "lr": base_lr * backbone_lr_scale},
-        ],
-        weight_decay=1e-4
-    )
+def classification_loss(loss_name, logits, targets, smoothing=False, smoothing_eps=0.05):
+    label_smoothing = smoothing_eps if smoothing else 0.0
+    if loss_name == "focal":
+        return focal_loss(logits, targets, label_smoothing=label_smoothing)
+    return F.cross_entropy(logits, targets, label_smoothing=label_smoothing)
 
 
 # --- ENSEMBLE EVALUATOR ---
-def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device):
+def evaluate_ensemble_on_test(config_dir, test_game_name, heads, device):
     data_dir = "assets/new_dataset"
     test_ds = GridDataset(data_dir, mode='test', test_game=test_game_name)
     if len(test_ds) == 0: return 0.0
@@ -255,7 +209,7 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device)
     models_list = []
     for file in os.listdir(config_dir):
         if file.endswith(".pth"):
-            model = ConfigurableChessResNet(heads, freeze).to(device)
+            model = ConfigurableChessResNet(heads).to(device)
             model.load_state_dict(torch.load(os.path.join(config_dir, file), map_location=device))
             model.eval()
             models_list.append(model)
@@ -283,13 +237,16 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device)
                     for i in range(12): unified_prob[:, i + 1] = prob_occ[:, 1] * prob_piece[:, i]
                     ensemble_probs += unified_prob
                 elif heads == 3:
-                    out_occ, out_color, out_piece, _ = model(inputs)
-                    prob_occ, prob_color, prob_piece6 = F.softmax(out_occ, dim=1), F.softmax(out_color, dim=1), F.softmax(out_piece, dim=1)
+                    out_occ, out_white_piece, out_black_piece, _ = model(inputs)
+                    prob_occ = F.softmax(out_occ, dim=1)
+                    prob_white_piece = F.softmax(out_white_piece, dim=1)
+                    prob_black_piece = F.softmax(out_black_piece, dim=1)
                     unified_prob = torch.zeros((inputs.size(0), 13), device=device)
                     unified_prob[:, 0] = prob_occ[:, 0]
                     for i in range(6):
-                        unified_prob[:, i + 1] = prob_occ[:, 1] * prob_color[:, 1] * prob_piece6[:, i]
-                        unified_prob[:, i + 7] = prob_occ[:, 1] * prob_color[:, 0] * prob_piece6[:, i]
+                        # Split occupied probability equally between white/black branches.
+                        unified_prob[:, i + 1] = prob_occ[:, 1] * 0.5 * prob_white_piece[:, i]
+                        unified_prob[:, i + 7] = prob_occ[:, 1] * 0.5 * prob_black_piece[:, i]
                     ensemble_probs += unified_prob
 
             ensemble_probs /= len(models_list)
@@ -302,35 +259,31 @@ def evaluate_ensemble_on_test(config_dir, test_game_name, heads, freeze, device)
 # --- MAIN GRID SEARCH ---
 def main():
     data_dir = "assets/new_dataset"
-    output_base = "experiment114_results"
+    output_base = "experiment114_results_occ_white_black_nofreeze"
     os.makedirs(output_base, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Starting 72-Combination Grid Search on {device}...")
+    print(f"Starting grid search on {device}...")
 
     heads_opts = [2, 3]
     sample_opts = ['50_50']
-    triplet_opts = ['new']
-    freeze_opts = [True, False]
-    batch_size_opts = [16, 32]
+    triplet_opts = ['new', 'old']
+    batch_size_opts = [32]
+    loss_opts = ['ce', 'focal']
+    smoothing_opts = [True, False]
 
-    combs = [[1, '50_50', 'old', True, 32],  # og number 1 seed
-             [1, '50_50', 'new', True, 16],  # my improvment
-             [3, '50_50', 'old', False, 32], # og number 2 seed
-             [3, '50_50', 'new', True, 16],  # my improvment
-             [1, 'none', 'old', False, 32],  # og number 3 seed
-             [2, '50_50', 'new', True, 16]]  # my guess
 
-    all_combinations = list(itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts))
-    todo = all_combinations + combs
+    all_combinations = list(
+        itertools.product(heads_opts, sample_opts, triplet_opts, batch_size_opts, loss_opts, smoothing_opts)
+    )
+    todo = all_combinations
 
     all_games = ['game2', 'game4', 'game6', 'game7']
     results = []
 
-    for combination_idx, (heads, sampling, triplet_mode, freeze, batch_size) in enumerate(todo, 1):
-            # enumerate(itertools.product(heads_opts, sample_opts, triplet_opts, freeze_opts, batch_size_opts), 1)):
-        config_name = f"H{heads}_S-{sampling}_T-{triplet_mode}_F-{freeze}_B-{batch_size}"
-        print(f"\n{'=' * 60}\nModel {combination_idx}/72: {config_name}\n{'=' * 60}")
+    for combination_idx, (heads, sampling, triplet_mode, batch_size, loss_name, smoothing) in enumerate(todo, 1):
+        config_name = f"H{heads}_S-{sampling}_T-{triplet_mode}_B-{batch_size}_L-{loss_name}_SM-{smoothing}"
+        print(f"\n{'=' * 60}\nModel {combination_idx}/{len(todo)}: {config_name}\n{'=' * 60}")
 
         config_dir = os.path.join(output_base, config_name)
         os.makedirs(config_dir, exist_ok=True)
@@ -351,7 +304,7 @@ def main():
                                       num_workers=4, collate_fn=custom_collate)
             val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=4, collate_fn=custom_collate)
 
-            model = ConfigurableChessResNet(heads, freeze).to(device)
+            model = ConfigurableChessResNet(heads).to(device)
             optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.0001, weight_decay=1e-4)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
             early_stopping = EarlyStopping(patience=40)
@@ -362,9 +315,7 @@ def main():
             # MAIN EVENT: Up to 100 epochs
             for epoch in range(100):
                 final_epoch = epoch + 1
-                progressive_unfreeze(model, epoch, optimizer)
                 model.train()
-                freeze_batchnorm_for_frozen_layers(model)
                 for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1} Train", leave=False):
                     if batch is None: continue
                     boards, chars = batch
@@ -377,23 +328,37 @@ def main():
 
                     if heads == 1:
                         out_main, features = model(inputs)
-                        total_loss += nn.CrossEntropyLoss()(out_main, t_unified)
+                        total_loss += classification_loss(loss_name, out_main, t_unified, smoothing=smoothing)
                         if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_unified, mask, device)
                         else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
                     elif heads == 2:
                         out_occ, out_piece, features = model(inputs)
-                        total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
-                        if mask.sum() > 0: total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece12[mask])
+                        total_loss += classification_loss(loss_name, out_occ, t_occ, smoothing=smoothing)
+                        if mask.sum() > 0:
+                            total_loss += classification_loss(
+                                loss_name, out_piece[mask], t_piece12[mask], smoothing=smoothing
+                            )
                         if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
                         else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
                     elif heads == 3:
-                        out_occ, out_color, out_piece, features = model(inputs)
-                        total_loss += nn.CrossEntropyLoss()(out_occ, t_occ)
-                        if mask.sum() > 0:
-                            total_loss += nn.CrossEntropyLoss()(out_color[mask], t_color[mask])
-                            total_loss += nn.CrossEntropyLoss()(out_piece[mask], t_piece6[mask])
-                        if triplet_mode == "old": total_loss += calculate_triplet_loss(features, t_piece12, mask, device)
-                        else: total_loss += calculate_multi_similarity_loss(features, t_piece12, mask, device)
+                        out_occ, out_white_piece, out_black_piece, features = model(inputs)
+                        mask_white = mask & (t_color == 1)
+                        mask_black = mask & (t_color == 0)
+                        total_loss += classification_loss(loss_name, out_occ, t_occ, smoothing=smoothing)
+                        if mask_white.sum() > 0:
+                            total_loss += classification_loss(
+                                loss_name, out_white_piece[mask_white], t_piece6[mask_white], smoothing=smoothing
+                            )
+                        if mask_black.sum() > 0:
+                            total_loss += classification_loss(
+                                loss_name, out_black_piece[mask_black], t_piece6[mask_black], smoothing=smoothing
+                            )
+                        if triplet_mode == "old":
+                            total_loss += calculate_triplet_loss(features, t_piece6, mask_white, device)
+                            total_loss += calculate_triplet_loss(features, t_piece6, mask_black, device)
+                        else:
+                            total_loss += calculate_multi_similarity_loss(features, t_piece6, mask_white, device)
+                            total_loss += calculate_multi_similarity_loss(features, t_piece6, mask_black, device)
 
 
                     total_loss.backward()
@@ -415,9 +380,18 @@ def main():
                             out_occ, out_piece, _ = model(inputs)
                             preds = torch.where(torch.argmax(out_occ, 1) == 0, 0, torch.argmax(out_piece, 1) + 1)
                         elif heads == 3:
-                            out_occ, out_color, out_piece, _ = model(inputs)
-                            p_occ, p_color, p_piece6 = torch.argmax(out_occ, 1), torch.argmax(out_color, 1), torch.argmax(out_piece, 1)
-                            preds = torch.where(p_occ == 0, 0, torch.where(p_color == 1, p_piece6 + 1, p_piece6 + 7))
+                            out_occ, out_white_piece, out_black_piece, _ = model(inputs)
+                            p_occ = torch.argmax(out_occ, 1)
+                            p_white_piece = torch.argmax(out_white_piece, 1)
+                            p_black_piece = torch.argmax(out_black_piece, 1)
+                            white_conf = F.softmax(out_white_piece, dim=1).max(dim=1)[0]
+                            black_conf = F.softmax(out_black_piece, dim=1).max(dim=1)[0]
+                            occupied_preds = torch.where(
+                                white_conf >= black_conf,
+                                p_white_piece + 1,
+                                p_black_piece + 7
+                            )
+                            preds = torch.where(p_occ == 0, 0, occupied_preds)
 
                         all_preds.extend(preds.cpu().numpy())
                         all_targets.extend(t_unified.cpu().numpy())
@@ -447,7 +421,7 @@ def main():
 
         # --- ENSEMBLE EVALUATION ---
         print(f">>> Running 4-Model Ensemble Evaluation on game5...")
-        ensemble_test_f1 = evaluate_ensemble_on_test(config_dir, "game5", heads, freeze, device)
+        ensemble_test_f1 = evaluate_ensemble_on_test(config_dir, "game5", heads, device)
         print(f">>> FINAL UNSEEN TEST F1: {ensemble_test_f1:.2f}%")
 
         results.append({
@@ -455,8 +429,9 @@ def main():
             "Heads": heads,
             "Sampling": sampling,
             "Triplet Loss": triplet_mode,
-            "Freeze Backbone": freeze,
             "Batch Size": batch_size,
+            "Loss": loss_name,
+            "Label Smoothing": smoothing,
             "Mean 4-Fold F1": mean_cv_f1,
             "Ensemble Test F1 (game5)": ensemble_test_f1,
             "Epochs game2": fold_epochs.get('game2', 0),
@@ -471,7 +446,7 @@ def main():
         pd.DataFrame(results).to_csv(os.path.join(output_base, "running_results_exp_114.csv"), index=False)
 
     print(
-        "\n=============================================\nALL 72 PERMUTATIONS COMPLETE!\n=============================================")
+        f"\n=============================================\nALL {len(todo)} CONFIGURATIONS COMPLETE!\n=============================================")
     final_df = pd.DataFrame(results).sort_values(by="Ensemble Test F1 (game5)", ascending=False)
     final_df.to_csv(os.path.join(output_base, "FINAL_RESULTS_114.csv"), index=False)
     print(final_df.to_string(index=False))
