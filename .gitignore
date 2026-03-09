@@ -5,3 +5,4 @@ __pycache__/
 *.pth
 .DS_Store
 .vscode/
+BASE_TO_AUGMENT/
