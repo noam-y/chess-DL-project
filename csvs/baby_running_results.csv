@@ -1,0 +1,6 @@
+Config ID,Heads,Sampling,Triplet Loss,Freeze Backbone,Mean 4-Fold F1,Ensemble Test F1 (game5)
+H1_S-none_T-False_F-True,1,none,False,True,48.83776720623951,70.71031101917202
+H2_S-50_50_T-False_F-False,2,50_50,False,False,53.89428918336766,80.8390262780115
+H2_S-uniform_T-True_F-True,2,uniform,True,True,43.83933573803154,66.26955412549003
+H3_S-none_T-False_F-False,3,none,False,False,54.068427111886066,81.42057070840332
+H3_S-50_50_T-True_F-True,3,50_50,True,True,46.2901513797157,67.00771909274312

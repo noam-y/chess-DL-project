@@ -1,0 +1,2 @@
+Config ID,Heads,Sampling,Triplet Loss,Freeze Backbone,Batch Size,Mean 4-Fold F1,Ensemble Test F1 (game5),Epochs game2,Best F1 game2,Epochs game4,Best F1 game4,Epochs game6,Best F1 game6,Epochs game7,Best F1 game7
+H3_S-50_50_T-new_F-True_B-16,3,50_50,new,True,16,40.99316130439403,58.39160751400245,53,30.708733047138324,55,47.94682242581861,46,27.134634049672098,55,58.18245569494708
