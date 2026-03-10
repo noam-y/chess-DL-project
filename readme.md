@@ -27,14 +27,13 @@ module load anaconda
 conda create --name chess_env python=3.9 -y
 
 # 3. Activate the environment
-source activate chess_env
+conda activate chess_env
 
 # 4. Install dependencies
-pip install torch torchvision pandas numpy Pillow tqdm
+pip install -r requirements.txt
 
 # 5. ask for the gpu
-sinteractive --qos course --part gtx1080 --gpu 1 --time 0-08:00:00
-# make sure you connect via ssh to the gpu you requested.
+srun --partition=course --qos=course --gres=gpu:rtx_3090:1 --time=04:00:00 --pty bash -i
 ```
 
 
@@ -42,33 +41,21 @@ sinteractive --qos course --part gtx1080 --gpu 1 --time 0-08:00:00
 
 ## 🚀 Data management
 ```bash
-# Navigate to the assets folder
-cd ~/chess-DL-project/assets
+# Navigate to the project
+cd ~/chess-DL-project
 
-# Create the target directory and move the zip there
-mkdir -p labeled_data
-mv *.zip labeled_data/
-cd labeled_data
+# Download all the data:
+python setup_dataset.py
 
-# Extract all sub-zips into their own folders
-for f in *.zip; do
-  dirname="${f%.zip}"      # Get filename without extension
-  unzip -o "$f" -d "$dirname"  # Unzip into a folder with that name
-done
-
-# Cleanup: Remove the zip files to save space
-rm *.zip
+# Preprocess
+python preprocess_dataset.py
 ```
 ### Runnning the training - finally!
-srun --pty -p rtx2080 --qos=course --gres=gpu:1 --mem=16G --time=1:00:00 /bin/bash
-module load anaconda
-source activate chess_env
-python train.py --data_dir ./assets/labeled_data --epochs 1 --batch_size 4
+python train.py --data_dir ./assets/dataset --epochs 1 --batch_size 4
 
 #### trouble: cant connect after receiving cluster?
-''' squeue -u noamjeh '''
+''' squeue --me '''
 then - copy the nodelist- server name and connect to it via ssh. :)
-
 
 ## 📊 Evaluation
 
@@ -86,5 +73,15 @@ Run the script from the command line, providing the path to your model checkpoin
 python evaluate.py --model_path checkpoints/model_epoch_10.pth --test_dir aug/new_augmented_data
 ```
 
-## upload to git-
-sh deploy.sh (from git bash!)
+
+
+new from the beggining:
+
+git clone https://github.com/noam-y/chess-DL-project/tree/master
+cd chess-DL-project
+pip install -r requirements.txt
+python setup_dataset.py
+python preprocess_dataset.py
+
+python train.py
+python evaluate.py
