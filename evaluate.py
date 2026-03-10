@@ -1,185 +1,221 @@
-import os
-import sys
+#!/usr/bin/env python3
+"""Evaluate saved fold models on a held-out test game."""
+
+from __future__ import annotations
+
 import argparse
-import torch
-import pandas as pd
+from pathlib import Path
+
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
-from PIL import Image
-from tqdm import tqdm
+import torch
+from sklearn.metrics import confusion_matrix, f1_score, precision_recall_fscore_support
+from torch.utils.data import DataLoader
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
+from train import (
+    ConfigurableChessResNet,
+    GridDataset,
+    chars_to_tensors,
+    custom_collate,
+    infer_unified_probs,
+)
 
-try:
-    from train import PieceClassifier
-except ImportError:
-    print("Error: Could not import PieceClassifier from train.py")
-    sys.exit(1)
-
-IMG_SIZE = 480
-PATCH_SIZE = 60
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-PIECE_TO_ID = {
-    'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6,
-    'p': 7, 'n': 8, 'b': 9, 'r': 10, 'q': 11, 'k': 12
+IDX_TO_LABEL = {
+    0: "empty",
+    1: "white_pawn",
+    2: "white_knight",
+    3: "white_bishop",
+    4: "white_rook",
+    5: "white_queen",
+    6: "white_king",
+    7: "black_pawn",
+    8: "black_knight",
+    9: "black_bishop",
+    10: "black_rook",
+    11: "black_queen",
+    12: "black_king",
 }
-ID_TO_PIECE = {v: k for k, v in PIECE_TO_ID.items()}
-ID_TO_PIECE[0] = '1'
 
-def prediction_to_fen(pred_tensor):
-    board = pred_tensor.cpu().numpy()
-    rows_fen = []
-    for r in range(8):
-        row_str = ""
-        empty_count = 0
-        for c in range(8):
-            val = board[r, c]
-            char = ID_TO_PIECE.get(val, '1')
-            if char == '1':
-                empty_count += 1
-            else:
-                if empty_count > 0:
-                    row_str += str(empty_count)
-                    empty_count = 0
-                row_str += char
-        if empty_count > 0:
-            row_str += str(empty_count)
-        rows_fen.append(row_str)
-    return "/".join(rows_fen)
 
-def compare_fens(true_fen, pred_fen):
-    def expand(fen):
-        rows = fen.split(' ')[0].split('/')
-        res = []
-        for row in rows:
-            for char in row:
-                if char.isdigit():
-                    res.extend(['.'] * int(char))
-                else:
-                    res.append(char)
-        return res
+def resolve_checkpoint_dir(config_dir: Path) -> Path:
+    """Accept either the fold-checkpoint directory or its parent directory."""
+    if not config_dir.exists():
+        raise FileNotFoundError(f"Directory not found: {config_dir}")
 
-    list_true = expand(true_fen)
-    list_pred = expand(pred_fen)
-    
-    if len(list_pred) != 64: return 0, False
+    if any(config_dir.glob("*.pth")):
+        return config_dir
 
-    correct_count = sum([1 for t, p in zip(list_true, list_pred) if t == p])
-    is_perfect = (correct_count == 64)
-    return correct_count, is_perfect
+    candidate_dirs = [d for d in config_dir.iterdir() if d.is_dir() and any(d.glob("*.pth"))]
+    if not candidate_dirs:
+        raise FileNotFoundError(f"No .pth files found under: {config_dir}")
+    if len(candidate_dirs) > 1:
+        dirs_text = ", ".join(str(d) for d in candidate_dirs)
+        raise ValueError(
+            "Multiple candidate checkpoint directories found. "
+            f"Please pass --config-dir explicitly. Candidates: {dirs_text}"
+        )
+    return candidate_dirs[0]
 
-class EvalDataset(Dataset):
-    def __init__(self, csv_file, root_dir):
-        self.df = pd.read_csv(csv_file)
-        self.root_dir = root_dir
-        self.transform = transforms.Compose([
-            transforms.Resize((IMG_SIZE, IMG_SIZE)),
-            transforms.ToTensor(),
-        ])
 
-    def __len__(self):
-        return len(self.df)
+def evaluate_ensemble_on_test(
+    config_dir: Path,
+    test_game_name: str,
+    device: torch.device,
+    test_aug: bool = False,
+) -> dict[str, object]:
+    data_dir = "assets/dataset"
+    test_ds = GridDataset(data_dir, mode="test", test_game=test_game_name)
+    if len(test_ds) == 0:
+        return {
+            "macro_f1": 0.0,
+            "confusion_matrix": np.zeros((13, 13), dtype=int),
+            "per_piece": [],
+            "num_samples": 0,
+        }
 
-    def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        img_path = os.path.join(self.root_dir, row['filename'])
-        image = Image.open(img_path).convert('RGB')
-        image = self.transform(image)
-        return image, row['fen'], row['filename']
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=64,
+        shuffle=False,
+        num_workers=4,
+        collate_fn=custom_collate,
+    )
 
-def main(args):
-    csv_path = os.path.join(args.test_dir, args.csv_name)
-    if not os.path.exists(csv_path):
-        print(f"Error: CSV file not found at {csv_path}")
-        return
-    
-    if not os.path.exists(args.model_path):
-        print(f"Error: Model weights not found at {args.model_path}")
-        return
+    models_list = []
+    for ckpt in sorted(config_dir.glob("*.pth")):
+        model = ConfigurableChessResNet().to(device)
+        model.load_state_dict(torch.load(ckpt, map_location=device))
+        model.eval()
+        models_list.append(model)
 
-    print(f"Model: {args.model_path}")
-    print(f"Data:  {args.test_dir}")
-    print(f"Device: {DEVICE}")
+    if not models_list:
+        return {
+            "macro_f1": 0.0,
+            "confusion_matrix": np.zeros((13, 13), dtype=int),
+            "per_piece": [],
+            "num_samples": 0,
+        }
 
-    dataset = EvalDataset(csv_path, args.test_dir)
-    loader = DataLoader(dataset, batch_size=4, shuffle=False)
-    
-    model = PieceClassifier().to(DEVICE)
-    try:
-        state_dict = torch.load(args.model_path, map_location=DEVICE)
-        model.load_state_dict(state_dict)
-        print("Weights loaded successfully.")
-    except Exception as e:
-        print(f"Error loading weights: {e}")
-        return
-
-    model.eval()
-
-    total_squares = 0
-    correct_squares = 0
-    total_boards = 0
-    perfect_boards = 0
-    results = [] 
-
-    print("Running Inference...")
+    all_preds, all_targets = [], []
     with torch.no_grad():
-        for images, true_fens, filenames in tqdm(loader):
-            images = images.to(DEVICE)
-            Batch_Size = images.shape[0]
+        for batch in test_loader:
+            if batch is None:
+                continue
+            boards, chars = batch
+            inputs = boards.to(device)
+            t_unified, _, _ = chars_to_tensors(chars, device)
 
-            # Cut images into patches
-            patches = images.unfold(2, PATCH_SIZE, PATCH_SIZE).unfold(3, PATCH_SIZE, PATCH_SIZE)
-            patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous().view(-1, 3, PATCH_SIZE, PATCH_SIZE)
-            
-            # Inference
-            outputs = model(patches)
-            
-            # --- TIKUN (Correction) ---
-            preds_flat = torch.argmax(outputs, dim=1) # Returns just the indices
-            # --------------------------
-            
-            preds_grid = preds_flat.view(Batch_Size, 8, 8)
-            
-            for i in range(Batch_Size):
-                pred_fen_str = prediction_to_fen(preds_grid[i])
-                true_fen_str = true_fens[i]
-                
-                correct, is_perfect = compare_fens(true_fen_str, pred_fen_str)
-                
-                total_squares += 64
-                correct_squares += correct
-                total_boards += 1
-                if is_perfect:
-                    perfect_boards += 1
-                
-                results.append({
-                    'filename': filenames[i],
-                    'true_fen': true_fen_str,
-                    'pred_fen': pred_fen_str,
-                    'accuracy': correct / 64.0,
-                    'is_perfect': is_perfect
-                })
+            ensemble_probs = torch.zeros((inputs.size(0), 13), device=device)
+            for model in models_list:
+                ensemble_probs += infer_unified_probs(model, inputs, test_aug=test_aug)
 
-    piece_acc = 100 * correct_squares / total_squares if total_squares > 0 else 0
-    board_acc = 100 * perfect_boards / total_boards if total_boards > 0 else 0
-    
-    print("-" * 30)
-    print(f"Piece Accuracy: {piece_acc:.2f}%")
-    print(f"Board Accuracy: {board_acc:.2f}%")
-    print("-" * 30)
+            ensemble_probs /= len(models_list)
+            all_preds.extend(torch.argmax(ensemble_probs, dim=1).cpu().numpy())
+            all_targets.extend(t_unified.cpu().numpy())
 
-    output_csv = "evaluation_results.csv"
-    pd.DataFrame(results).to_csv(output_csv, index=False)
-    print(f"Results saved to {output_csv}")
+    labels = list(range(13))
+    cm = confusion_matrix(all_targets, all_preds, labels=labels)
+    macro_f1 = f1_score(all_targets, all_preds, average="macro", zero_division=0) * 100
+    precision, recall, f1_each, support = precision_recall_fscore_support(
+        all_targets,
+        all_preds,
+        labels=labels,
+        zero_division=0,
+    )
+
+    per_piece = []
+    for idx in labels:
+        tp = int(cm[idx, idx])
+        fp = int(cm[:, idx].sum() - tp)
+        fn = int(cm[idx, :].sum() - tp)
+        per_piece.append(
+            {
+                "label": IDX_TO_LABEL[idx],
+                "tp": tp,
+                "fp": fp,
+                "fn": fn,
+                "support": int(support[idx]),
+                "precision": float(precision[idx]),
+                "recall": float(recall[idx]),
+                "f1": float(f1_each[idx]),
+            }
+        )
+
+    return {
+        "macro_f1": macro_f1,
+        "confusion_matrix": cm,
+        "per_piece": per_piece,
+        "num_samples": len(all_targets),
+    }
+
+
+def print_confusion_matrix(cm: np.ndarray) -> None:
+    labels = [IDX_TO_LABEL[i] for i in range(13)]
+    header = "true\\pred".ljust(14) + " ".join(label[:3].rjust(5) for label in labels)
+    print("\nConfusion Matrix (rows=true, cols=pred):")
+    print(header)
+    for i, row in enumerate(cm):
+        row_name = labels[i][:12].ljust(14)
+        row_values = " ".join(str(int(v)).rjust(5) for v in row)
+        print(f"{row_name}{row_values}")
+
+
+def print_per_piece_report(per_piece: list[dict[str, object]]) -> None:
+    print("\nPer-piece metrics:")
+    print("label".ljust(14), "TP".rjust(5), "FP".rjust(5), "FN".rjust(5), "prec".rjust(8), "rec".rjust(8), "f1".rjust(8))
+    for m in per_piece:
+        print(
+            str(m["label"]).ljust(14),
+            str(m["tp"]).rjust(5),
+            str(m["fp"]).rjust(5),
+            str(m["fn"]).rjust(5),
+            f'{float(m["precision"]):.3f}'.rjust(8),
+            f'{float(m["recall"]):.3f}'.rjust(8),
+            f'{float(m["f1"]):.3f}'.rjust(8),
+        )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Evaluate trained fold models on a test game.")
+    parser.add_argument(
+        "--config-dir",
+        type=Path,
+        default=Path("train_results"),
+        help="Fold checkpoints directory, or parent directory that contains it.",
+    )
+    parser.add_argument(
+        "--test-game",
+        type=str,
+        default="game5",
+        help="Test game folder name (default: game5).",
+    )
+    parser.add_argument(
+        "--test-aug",
+        action="store_true",
+        help="Enable test-time augmentation for evaluation.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    resolved_dir = resolve_checkpoint_dir(args.config_dir)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    results = evaluate_ensemble_on_test(
+        config_dir=resolved_dir,
+        test_game_name=args.test_game,
+        device=device,
+        test_aug=args.test_aug,
+    )
+
+    print(f"Checkpoint dir: {resolved_dir}")
+    print(f"Test game: {args.test_game}")
+    print(f"Test-time augmentation: {args.test_aug}")
+    print(f"Samples: {results['num_samples']}")
+    print(f"Ensemble Test F1 ({args.test_game}): {results['macro_f1']:.2f}%")
+    print_confusion_matrix(results["confusion_matrix"])
+    print_per_piece_report(results["per_piece"])
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--test_dir", type=str, default="new_augmented_data")
-    parser.add_argument("--csv_name", type=str, default="augmented_ground_truth.csv")
-
-    args = parser.parse_args()
-    main(args)
+    main()
