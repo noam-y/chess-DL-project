@@ -30,7 +30,9 @@ def process_dataset(input_root, output_root):
     tile_size = 96  # Output size
     pad = (tile_size - square_size) // 2  # 18 pixels
 
-    for game_dir in input_path.glob("game*_per_frame"):
+    # Support datasets extracted with extra wrapper directories
+    # (e.g. content/drive/MyDrive/labeled_data/game*_per_frame).
+    for game_dir in input_path.rglob("game*_per_frame"):
         game_id = game_dir.name.replace("_per_frame", "")
         print(f"Processing {game_id}...")
 
