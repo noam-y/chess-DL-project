@@ -366,7 +366,7 @@ def main():
         best_fold_f1 = 0.0
         final_epoch = 0
 
-        for epoch in range(100):
+        for epoch in range(1):
             current_epoch = epoch + 1
             final_epoch = current_epoch
             model.train()
