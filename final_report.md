@@ -1,10 +1,12 @@
 # Chessboard State Prediction from a Single RGB Image
 
-## 1. Abstract
+## 1\. Abstract
 
 This project addresses automatic chessboard state prediction from a single RGB image by classifying all 64 squares and reconstructing board state. We developed and compared multiple pipelines, starting from a patch-based CNN baseline and progressing to a configurable multi-head ResNet-18 model with metric-learning regularization and fold-wise ensembling. The final training protocol uses game-based cross-validation, weighted sampling to reduce class imbalance, and a held-out unseen game for final testing. Our primary metric is macro F1, chosen to prevent inflated performance from dominant empty-square classes. The resulting framework is robust, reproducible, and aligned with the official course submission requirements.
 
-## 2. Introduction
+## ---
+
+## 2\. Introduction
 
 ### Task Description and Motivation
 
@@ -14,53 +16,59 @@ The goal is to convert a chessboard image into a structured board-state represen
 
 The task is difficult because:
 
-- empty squares are much more frequent than piece squares (severe class imbalance),
-- piece appearances vary across games, boards, lighting, and camera viewpoints,
-- several classes are visually similar (for example bishop vs pawn under blur or occlusion),
+- empty squares are much more frequent than piece squares (severe class imbalance),  
+- piece appearances vary across games, boards, lighting, and camera viewpoints,  
+- several classes are visually similar (for example bishop vs pawn under blur or occlusion),  
 - errors in a few squares can make the entire board reconstruction wrong.
 
 Our goal is to improve class-balanced recognition and cross-game generalization, not just average accuracy on easy/majority classes.
 
+### 
+
 ### Main Contributions
 
-- A configurable multi-head ResNet-18 architecture that decomposes board-square classification into structured sub-decisions.
-- A full game-based cross-validation protocol with a strict unseen test game.
-- Comparative metric-learning experiments (hard triplet style vs multi-similarity style regularization).
-- Ensemble inference across fold-best checkpoints to reduce variance.
+- A configurable multi-head ResNet-18 architecture that decomposes board-square classification into structured sub-decisions.  
+- A full game-based cross-validation protocol with a strict unseen test game.  
+- Comparative metric-learning experiments (hard triplet style vs multi-similarity style regularization).  
+- Ensemble inference across fold-best checkpoints to reduce variance.  
 - Practical OOD/uncertainty inspection tooling through confidence-threshold analysis.
 
-## 3. Related Work
+---
+
+## 3\. Related Work
 
 This project builds on three relevant directions:
 
-1. **CNN classification for local image patches**, used in our early baseline (`train.py`).
-2. **Residual transfer learning (ResNet-18)**, used as the main backbone in the advanced pipeline (`experiment114.py`, `experiment2.py`, `SUPER_SEARCH_9001.py`).
+1. **CNN classification for local image patches**, used in our early baseline (`train.py`).  
+2. **Residual transfer learning (ResNet-18)**, used as the main backbone in the advanced pipeline (`experiment114.py`, `experiment2.py`, `SUPER_SEARCH_9001.py`).  
 3. **Metric learning for embedding separation**, including triplet-style and multi-similarity losses.
 
 Compared with end-to-end board detectors or transformer pipelines, our approach emphasizes controlled per-square classification with explicit label structure (occupancy and piece identity decomposition), which matches the available labels and training organization in this repository.
 
-## 4. Method
+---
+
+## 4\. Method
 
 ### 4.1 Input and Output Representation
 
 Training labels are derived from FEN tokens at square level:
 
-- `e` for empty
-- uppercase letters for white pieces
+- `e` for empty  
+- uppercase letters for white pieces  
 - lowercase letters for black pieces
 
-During training, labels are mapped into a unified 13-class space (empty + 12 pieces). At inference, predictions are converted back into board notation (FEN-like row serialization) for board-level evaluation.
+During training, labels are mapped into a unified 13-class space (empty \+ 12 pieces). At inference, predictions are converted back into board notation (FEN-like row serialization) for board-level evaluation.
 
 ### 4.2 Dataset and Splits
 
 The main pipeline reads from `assets/new_dataset` with per-game folders containing:
 
-- `gt.csv`
+- `gt.csv`  
 - `tagged_images/`
 
 We use game-based splitting:
 
-- CV folds: `game2`, `game4`, `game6`, `game7` (leave-one-game-out within this pool)
+- CV folds: `game2`, `game4`, `game6`, `game7` (leave-one-game-out within this pool)  
 - held-out unseen test: `game5`
 
 This split reduces leakage compared with random frame-level splits.
@@ -69,11 +77,11 @@ This split reduces leakage compared with random frame-level splits.
 
 The core model is `ConfigurableChessResNet`, based on ImageNet-pretrained ResNet-18 backbone, with alternative heads:
 
-- **1-head**: direct 13-class logits.
-- **2-head**: occupancy (2-class) + piece identity (12-class).
-- **3-head**:
-  - variant A: occupancy + color + 6-way piece type,
-  - variant B (latest branch): occupancy + white-piece head + black-piece head.
+- **1-head**: direct 13-class logits.  
+- **2-head**: occupancy (2-class) \+ piece identity (12-class).  
+- **3-head**:  
+  - variant A: occupancy \+ color \+ 6-way piece type,  
+  - variant B: occupancy \+ white-piece head \+ black-piece head.
 
 This decomposition helps separate easy/global decisions (empty vs occupied) from harder fine-grained piece classification.
 
@@ -81,21 +89,23 @@ This decomposition helps separate easy/global decisions (empty vs occupied) from
 
 Core configuration used in the focused experiment branch:
 
-- optimizer: Adam (`lr=1e-4`, `weight_decay=1e-4`)
-- scheduler: `ReduceLROnPlateau` on validation macro F1
-- early stopping after sustained non-improvement
+- optimizer: Adam (`lr=1e-4`, `weight_decay=1e-4`)  
+- scheduler: `ReduceLROnPlateau` on validation macro F1  
+- early stopping after sustained non-improvement  
 - up to 100 epochs per fold (higher in some exploratory scripts)
 
 A robust custom collator skips corrupted samples during batch assembly.
+
+### 
 
 ### 4.5 Loss Functions
 
 Total loss combines classification and optional metric regularization:
 
-- cross-entropy for occupancy and piece heads,
-- plus one metric term:
-  - **old**: hard triplet-style margin loss,
-  - **new**: multi-similarity loss on normalized embeddings.
+- cross-entropy for occupancy and piece heads,  
+- plus one metric term:  
+  - hard triplet-style margin loss,  
+  - multi-similarity loss on normalized embeddings.
 
 Metric terms are applied only on occupied-square subsets (and color-conditional subsets when relevant).
 
@@ -107,138 +117,259 @@ We use `WeightedRandomSampler` with a `50_50` mode that balances empty vs non-em
 
 For each configuration, fold-best checkpoints are loaded and their probabilities are averaged on the unseen test game. For multi-head variants, head outputs are fused into unified 13-class probabilities before averaging and argmax.
 
-## 5. Experiments
+---
+
+## 
+
+## 5\. Experiments
 
 ### 5.1 Experimental Setup
 
-To cover the full search space explored across repository experiment scripts, we define the experiment dimensions as:
+The quantitative table in Section 5.3 reflects the following actual experiment dimensions:
 
-- **Heads**: `1`, `2`, `3a`, `3b`
-  - `1`: unified 13-class head
-  - `2`: occupancy + 12-piece head
-  - `3a`: occupancy + color + shared 6-piece head
-  - `3b`: occupancy + white 6-piece head + black 6-piece head
-- **Sampling**: `50_50`, `none`, `uniform`
-- **Metric mode**: `none`, `old`, `new`
-  - `none`: cross-entropy only
-  - `old`: triplet-style metric regularization
-  - `new`: multi-similarity metric regularization
-- **Batch size**: `16`, `32`, `64`
-- **Freeze strategy**: `none`, `old`, `new`
-  - `none`: backbone trainable
-  - `old`: static backbone freezing
-  - `new`: progressive unfreezing schedule
+- **Heads**: `1`, `2`, `3`  
+- **Sampler**: `50 50`, `none`, `uniform`  
+- **Freeze Backbone**: `TRUE`, `FALSE`  
+- **Metric Loss**: `none`, `Triplet`, `Similarity`  
+- **Batch Size**: `16`, `32`, `64`  
+- **Classification Loss**: `cross entropy`, `focal`  
+- **Label Smoothing**: `TRUE`, `FALSE`  
+- **Data Augmentation**: `TRUE`, `FALSE`  
+- **Test-Time Augmentation (TTA)**: `TRUE`, `FALSE`  
+- **Metric Weight**: mainly `1` and `0.5`
 
-This section intentionally reflects the complete experimental intent (not only a narrow subset in one script version).
+In this report, we refer to:
+
+- `Triplet` as the "old" metric-learning mode,
+- `Similarity` as the "new" metric-learning mode,
+- `none` as classification-only training (no metric regularization).
 
 ### 5.2 Evaluation Metrics
 
 Primary metric:
 
-- **Macro F1 (%)** at square level (class-balanced)
-  - F1 is a standard machine-learning metric (not a custom metric in this project), defined as: `F1 = 2 * (Precision * Recall) / (Precision + Recall)`.
-  - We treat each square prediction as one classification sample, then compute F1 separately for each class (empty + 12 piece classes).
-  - Macro F1 is the unweighted mean of those per-class F1 values, so every class contributes equally.
-  - This is important because empty squares are much more frequent than piece classes; plain accuracy can look high even when rare pieces are predicted poorly.
+**Macro F1 (%)** at square level (class-balanced)
+
+- F1 is a standard machine-learning metric , defined as: `F1 = 2 * (Precision * Recall) / (Precision + Recall)`.  
+  - We treat each square prediction as one classification sample, then compute F1 separately for each class (empty \+ 12 piece classes).  
+  - Macro F1 is the unweighted mean of those per-class F1 values, so every class contributes equally.  
+  - This is important because empty squares are much more frequent than piece classes; plain accuracy can look high even when rare pieces are predicted poorly.  
   - Reporting in percent is simply: `Macro F1 * 100`.
 
-Secondary metrics (from baseline evaluation utilities):
+### 5.3 Quantitative Results:
 
-- piece accuracy (correct square labels over all squares)
-- board accuracy (exact 64/64 board reconstruction)
+| \#Heads | Sampler | Freeze Backbone | Metric Loss | Batch Size | Loss | Label Smoothing | Data Augmentation | Test-Time Augmentation | Metric Weight | Ensemble Test F1 (game5) |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 91.9 |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | FALSE | 0.5 | 89.57 |
+| 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 88.97 |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | FALSE | TRUE | 0.5 | 88.91 |
+| 3 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 88.81 |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | FALSE | FALSE | 0.5 | 88.78 |
+| 1 | none | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 88.63 |
+| 3 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 88.37 |
+| 3 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 88.37 |
+| 1 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.77 |
+| 2 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.46 |
+| 1 | uniform | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.43 |
+| 2 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.27 |
+| 2 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.25 |
+| 3 | uniform | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.19 |
+| 3 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.17 |
+| 3 | uniform | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.13 |
+| 1 | none | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.08 |
+| 3 | 50 50 | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.03 |
+| 2 | none | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 86.92 |
+| 3 | uniform | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 86.65 |
+| 3 | 50 50 | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 86.52 |
+| 2 | 50 50 | FALSE | Similarity | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 86.38 |
+| 2 | 50 50 | FALSE | Similarity | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 86.23 |
+| 2 | none | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 86.06 |
+| 3 | uniform | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 85.89 |
+| 1 | uniform | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 85.75 |
+| 2 | uniform | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 85.72 |
+| 2 | 50 50 | FALSE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 85.31 |
+| 2 | none | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 85.26 |
+| 2 | 50 50 | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 85.14 |
+| 2 | uniform | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 84.96 |
+| 2 | none | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 84.55 |
+| 2 | 50 50 | TRUE | Similarity | 64 | focal | FALSE | TRUE | TRUE | 0.5 | 84.33 |
+| 1 | 50 50 | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 84.12 |
+| 2 | uniform | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 84.07 |
+| 1 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 84.02 |
+| 1 | 50 50 | FALSE | Similarity | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.81 |
+| 2 | uniform | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.78 |
+| 2 | 50 50 | TRUE | Similarity | 64 | focal | FALSE | TRUE | FALSE | 0.5 | 83.7 |
+| 1 | 50 50 | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.64 |
+| 1 | 50 50 | TRUE | Similarity | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.47 |
+| 1 | 50 50 | FALSE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.12 |
+| 1 | none | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.02 |
+| 1 | none | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.02 |
+| 2 | 50 50 | TRUE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 82.95 |
+| 1 | 50 50 | TRUE | Similarity | 64 | cross entropy | FALSE | FALSE | FALSE | 1 | 82.91 |
+| 1 | uniform | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 82.86 |
+| 3 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 82.76 |
+| 1 | uniform | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 82.73 |
+| 2 | 50 50 | TRUE | Similarity | 64 | focal | TRUE | TRUE | FALSE | 0.5 | 82.59 |
+| 2 | 50 50 | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 81.81 |
+| 1 | none | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 81.62 |
+| 1 | 50 50 | FALSE | Similarity | 64 | cross entropy | FALSE | FALSE | FALSE | 1 | 80.74 |
+| 2 | 50 50 | TRUE | Similarity | 64 | focal | TRUE | FALSE | FALSE | 0.5 | 80.27 |
+| 2 | 50 50 | TRUE | Similarity | 64 | focal | FALSE | FALSE | TRUE | 0.5 | 79.89 |
+| 1 | none | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 79.07 |
+| 2 | 50 50 | TRUE | Similarity | 64 | focal | FALSE | FALSE | FALSE | 0.5 | 78.46 |
+| 2 | 50 50 | TRUE | Similarity | 64 | focal | TRUE | FALSE | TRUE | 0.5 | 77.09 |
+| 1 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 75.88 |
+| 1 | 50 50 | TRUE | Triplet | 64 | cross entropy | FALSE | FALSE | FALSE | 1 | 75.44 |
+| 1 | 50 50 | FALSE | Triplet | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 75.27 |
+| 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 74.52 |
+| 3 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 73.24 |
+| 3 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 73.24 |
+| 1 | 50 50 | TRUE | Triplet | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 72.95 |
+| 1 | 50 50 | FALSE | Triplet | 64 | cross entropy | FALSE | FALSE | FALSE | 1 | 72.02 |
+| 3 | 50 50 | FALSE | Similarity | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 69.98 |
+| 1 | none | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 68.25 |
+| 1 | none | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 68.25 |
+| 3 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 58.39 |
+| 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 57.6 |
+| 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 57.6 |
+| 3 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 57.49 |
+| 3 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 57.49 |
+| 2 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 56.64 |
+| 2 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 56.64 |
+| 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 56.36 |
 
-### 5.3 Quantitative Results
+## 6\. Ablation Study
 
-The experiment pipelines are designed to export running and final CSV summaries (for example: `running_results.csv`, `FINAL_RESULTS.csv`, `running_results_exp.csv`, `running_results_exp_114.csv`, `FINAL_RESULTS_114.csv`, and per-task files in parallel mode).
+### 6.1 Best Overall Configuration
 
-At the time of writing, final consolidated CSV artifacts are not committed in this branch, so numeric tables should be filled from the latest completed run outputs.
+From the Section 5.3 table, the best recorded configuration is:
 
-Planned final table schema:
+- Heads \= `2`  
+- Sampler \= `50 50`  
+- Freeze Backbone \= `FALSE`  
+- Metric Loss \= `Similarity`  
+- Batch Size \= `64`  
+- Loss \= `focal`  
+- Label Smoothing \= `TRUE`  
+- Data Augmentation \= `TRUE`  
+- Test-Time Augmentation \= `TRUE`  
+- Metric Weight \= `0.5`  
+- **Ensemble Test F1 \= 91.90**
 
-| Config ID | Heads | Sampling | Metric | Batch | Freeze | Mean 4-Fold F1 (%) | Unseen Test Ensemble F1 (game5, %) |
-|---|---|---|---|---:|---|---:|---:|
-| Example_Config_1 | 1 | 50_50 | old | 32 | old | TBD | TBD |
-| Example_Config_2 | 2 | uniform | new | 16 | new | TBD | TBD |
-| Example_Config_3 | 3a | none | none | 64 | none | TBD | TBD |
-| Example_Config_4 | 3b | 50_50 | new | 32 | new | TBD | TBD |
+### 6.2 Head Ablation
 
-### 5.4 Qualitative Results
+Using the best score achieved per head value in Section 5.3:
 
-Qualitative analysis is performed via confidence-based inspection:
+- **Head 1 best**: `88.97`  
+- **Head 2 best**: `91.90`  
+- **Head 3 best**: `88.81`
 
-- script: `inference_using_kfold.py`
-- outputs:
-  - `low_confidence_images.csv`
-  - `ood_inspection/` (copied low-confidence examples)
+Conclusion: all three heads can perform strongly, but the 2-head configuration reaches the highest final score.
 
-These samples should be included as figures in the final PDF to illustrate difficult cases such as edge crops, partial occlusions, and visually ambiguous squares.
+### 6.3 Metric-Loss Ablation
 
-## 6. Ablation Study (Required)
+Controlled comparison at (`Heads=2`, `Sampler=50 50`, `Freeze=FALSE`, `Batch=32`, `cross entropy`, no smoothing/aug/TTA):
 
-Our method contains multiple components, so we evaluate each one by controlled comparison.
+- `none`: `85.14`  
+- `Triplet`: `87.46` (also `87.25` in another repeated run)  
+- `Similarity`: `86.38` (also `86.23` in another repeated run)
 
-### 6.1 Components
+Interpretation: both metric-learning modes outperform `none` in this matched setup. Triplet is slightly higher than Similarity here, but Similarity reaches the global best under richer regularization settings (focal + smoothing + augmentation + TTA).
 
-1. **Head design**: `1` vs `2` vs `3a` vs `3b`
-2. **Metric loss**: `none` vs `old` vs `new`
-3. **Sampling strategy**: `none` vs `uniform` vs `50_50`
-4. **Batch size**: `16` vs `32` vs `64`
-5. **Freeze strategy**: `none` vs `old` vs `new`
+Additional controlled example (`Heads=1`, `Sampler=50 50`, `Freeze=FALSE`, `Batch=32`, `cross entropy`, no smoothing/aug/TTA):
 
-### 6.2 Ablation Questions
+- `Triplet (old)`: `75.88`  
+- `Similarity (new)`: `83.81`  
+- **Gain from new metric**: `+7.93 F1`
 
-- Does hierarchical head design (`2`, `3a`, `3b`) outperform a single unified head (`1`) on macro F1?
-- Does metric regularization (`old` or `new`) outperform no metric term (`none`)?
-- Which sampler (`none`, `uniform`, `50_50`) best handles class imbalance without harming overall generalization?
-- How sensitive is performance to batch size (`16`, `32`, `64`)?
-- Which freeze regime (`none`, `old`, `new`) yields the best stability and final unseen-game performance?
+### 6.4 Batch-Size Ablation
 
-### 6.3 Expected Interpretation
+For a controlled subset (`Heads=1`, `Sampler=50 50`, `Freeze=FALSE`, `Similarity`, `cross entropy`, no smoothing/aug/TTA):
 
-- Gains from `3a/3b` over `1/2` indicate deeper task decomposition improves difficult class decisions.
-- Gains from `new` over `old`/`none` indicate improved embedding geometry for hard negatives.
-- Gains from `50_50` over `none`/`uniform` indicate better minority-class handling.
-- Best performance at a specific batch size reflects optimization/generalization trade-offs.
-- Freeze strategy differences reflect transfer-learning stability versus adaptation flexibility.
+- Batch `16`: `83.12`  
+- Batch `32`: `83.81` (best)  
+- Batch `64`: `80.74`
 
-## 7. What Did Not Work (Optional)
+Conclusion: in this subset, medium batch (`32`) outperforms both smaller and larger alternatives.
 
-- The initial patch-CNN baseline (`train.py`) was fast to prototype but underpowered for hard generalization.
-- Large broad grid scripts accumulated code complexity and branch divergence, making it harder to maintain one clean experiment source of truth.
-- Parallel SLURM execution required per-task result files to avoid shared CSV overwrite/race conditions.
+### 6.5 Freeze Ablation
+
+For matched high-performance settings (`Heads=2`, `Sampler=50 50`, `Similarity`, `Batch=64`, `focal`, smoothing/aug/TTA toggles):
+
+- Example pair (all TRUE): `Freeze=FALSE 91.90` vs `Freeze=TRUE 82.95` (`+8.95` for no-freeze)  
+- Example pair (TTA FALSE): `89.57` vs `82.59` (`+6.98`)  
+- Example pair (Aug FALSE, TTA TRUE): `88.91` vs `77.09` (`+11.82`)
+
+Conclusion: under these settings, training the backbone consistently outperforms frozen-backbone runs.
+
+### 6.6 Sampling Ablation
+
+Sampling coverage in Section 5.3 includes all three samplers (`50 50`, `none`, `uniform`), but repeated rows and run variance make strict one-to-one comparison noisy.
+
+Top observed score per sampler:
+
+- `50 50`: `91.90`  
+- `none`: `88.63`  
+- `uniform`: `87.43`
+
+In repeated `none` rows (for example, `Heads=1`, `Triplet`, `Batch=32`, `Freeze=FALSE`), scores vary substantially (`88.63`, `83.02`, `68.25`), indicating sensitivity to run conditions and/or logging duplication.
+
+### 6.7 Additional Ablations Present in CSV
+
+The final results table also includes extra factors beyond the original grid:
+
+- classification loss type (`cross entropy` vs `focal`)  
+- label smoothing  
+- data augmentation  
+- test-time augmentation (TTA)  
+- metric-loss weight
+
+The highest scores are concentrated in the `focal + smoothing + augmentation + TTA` regime, indicating these components contribute materially to final performance.
+
+### 6.8 Notes on Data Quality
+
+`FINAL_RESULTS_ALL.csv` contains repeated configurations with different scores (duplicate rows or repeated keys). Therefore, conclusions are reported using explicit controlled comparisons and best-score summaries, not only single-row rank ordering.
+
+## 
+
+## 7\. What Did Not Work (Optional)
+
+- The initial patch-CNN baseline was fast to prototype but underpowered for hard generalization.  
+- Large broad grid scripts accumulated code complexity and branch divergence, making it harder to maintain one clean experiment source of truth.  
 - Some exploratory scripts contain logic bugs or inconsistent variables, so final reporting should rely on the stable script path.
 
-## 8. Discussion / Limitations (Optional but Recommended)
+## 8\. Discussion / Limitations (Optional but Recommended)
 
 ### Failure Cases
 
-- Low-confidence predictions often appear on edge-of-square crops or ambiguous visual context.
+- Low-confidence predictions often appear on edge-of-square crops or ambiguous visual context.  
 - Similar-looking pieces under blur/lighting changes remain challenging.
 
 ### Method Limitations
 
-- Current inference is square-local and does not enforce chess legality constraints globally.
-- Generalization depends on the diversity and size of available game splits.
+- Current inference is square-local and does not enforce chess legality constraints globally.  
+- Generalization depends on the diversity and size of available game splits.  
 - The unified 13-class experiment branch does not explicitly model an OOD output class in final predictions.
 
 ### Future Improvements
 
-- Add board-consistency postprocessing with chess-rule priors.
-- Expand data diversity and viewpoint augmentation.
-- Apply confidence calibration and uncertainty-aware outputs.
+- Add board-consistency postprocessing with chess-rule priors.  
+- Expand data diversity and viewpoint augmentation.  
+- Apply confidence calibration and uncertainty-aware outputs.  
 - Evaluate stronger backbones (for example lightweight ViT variants) under the same split protocol.
 
-## 9. References
+## 9\. References
 
-1. He, K., Zhang, X., Ren, S., Sun, J. Deep Residual Learning for Image Recognition. CVPR, 2016.
-2. Schroff, F., Kalenichenko, D., Philbin, J. FaceNet: A Unified Embedding for Face Recognition and Clustering. CVPR, 2015.
-3. Wang, X., Han, X., Huang, W., Dong, D., Scott, M. R. Multi-Similarity Loss with General Pair Weighting for Deep Metric Learning. CVPR, 2019.
-4. PyTorch Documentation. https://pytorch.org
+1. He, K., Zhang, X., Ren, S., Sun, J. Deep Residual Learning for Image Recognition. CVPR, 2016\.  
+2. Schroff, F., Kalenichenko, D., Philbin, J. FaceNet: A Unified Embedding for Face Recognition and Clustering. CVPR, 2015\.  
+3. Wang, X., Han, X., Huang, W., Dong, D., Scott, M. R. Multi-Similarity Loss with General Pair Weighting for Deep Metric Learning. CVPR, 2019\.  
+4. PyTorch Documentation. [https://pytorch.org](https://pytorch.org)
 
 ---
 
 ## Reproducibility Notes (Appendix)
 
-- Main run command: `python experiment114.py`
-- OOD inspection: `python inference_using_kfold.py --models_path <path> --heads <1|2|3> --dataset_path assets/new_dataset --threshold 0.5`
+- Main run command: `python experiment114.py`  
+- OOD inspection: `python inference_using_kfold.py --models_path <path> --heads <1|2|3> --dataset_path assets/new_dataset --threshold 0.5`  
 - Baseline training/evaluation scripts are available in `train.py`, `train_v2.py`, `evaluate.py`, and `evaluate_v2.py`.
