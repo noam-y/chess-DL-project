@@ -136,13 +136,7 @@ The quantitative table in Section 5.3 reflects the following actual experiment d
 - **Label Smoothing**: `TRUE`, `FALSE`  
 - **Data Augmentation**: `TRUE`, `FALSE`  
 - **Test-Time Augmentation (TTA)**: `TRUE`, `FALSE`  
-- **Metric Weight**: mainly `1` and `0.5`
-
-In this report, we refer to:
-
-- `Triplet` as the "old" metric-learning mode,
-- `Similarity` as the "new" metric-learning mode,
-- `none` as classification-only training (no metric regularization).
+- **Metric Weight**: `0.25`, `0.5`, `0.75`, `1`
 
 ### 5.2 Evaluation Metrics
 
@@ -160,8 +154,18 @@ Primary metric:
 
 | \#Heads | Sampler | Freeze Backbone | Metric Loss | Batch Size | Loss | Label Smoothing | Data Augmentation | Test-Time Augmentation | Metric Weight | Ensemble Test F1 (game5) |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 91.9 |
+| 2 | uniform | FALSE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 93.85 |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 92.70 |
+| 2 | 50 50 | FALSE | Similarity | 32 | focal | TRUE | TRUE | TRUE | 0.5 | 92.51 |
+| 2 | 50 50 | FALSE | Similarity | 16 | focal | TRUE | TRUE | TRUE | 0.5 | 92.14 |
+| 2 | 50 50 | FALSE | Similarity | 64 | cross entropy | TRUE | TRUE | TRUE | 0.5 | 92.08 |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 91.90 |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.75 | 91.73 |
+| 2 | 50 50 | FALSE | Triplet | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 91.71 |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | FALSE | TRUE | TRUE | 0.5 | 91.21 |
+| 1 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 90.47 |
 | 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | FALSE | 0.5 | 89.57 |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | FALSE | 0.5 | 89.54 |
 | 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 88.97 |
 | 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | FALSE | TRUE | 0.5 | 88.91 |
 | 3 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 88.81 |
@@ -169,7 +173,10 @@ Primary metric:
 | 1 | none | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 88.63 |
 | 3 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 88.37 |
 | 3 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 88.37 |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.25 | 88.17 |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 87.84 |
 | 1 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.77 |
+| 3 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 87.73 |
 | 2 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.46 |
 | 1 | uniform | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.43 |
 | 2 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.27 |
@@ -179,6 +186,7 @@ Primary metric:
 | 3 | uniform | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.13 |
 | 1 | none | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.08 |
 | 3 | 50 50 | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 87.03 |
+| 2 | none | FALSE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 86.92 |
 | 2 | none | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 86.92 |
 | 3 | uniform | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 86.65 |
 | 3 | 50 50 | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 86.52 |
@@ -192,6 +200,7 @@ Primary metric:
 | 2 | none | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 85.26 |
 | 2 | 50 50 | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 85.14 |
 | 2 | uniform | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 84.96 |
+| 2 | 50 50 | TRUE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 84.82 |
 | 2 | none | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 84.55 |
 | 2 | 50 50 | TRUE | Similarity | 64 | focal | FALSE | TRUE | TRUE | 0.5 | 84.33 |
 | 1 | 50 50 | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 84.12 |
@@ -199,7 +208,7 @@ Primary metric:
 | 1 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 84.02 |
 | 1 | 50 50 | FALSE | Similarity | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.81 |
 | 2 | uniform | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.78 |
-| 2 | 50 50 | TRUE | Similarity | 64 | focal | FALSE | TRUE | FALSE | 0.5 | 83.7 |
+| 2 | 50 50 | TRUE | Similarity | 64 | focal | FALSE | TRUE | FALSE | 0.5 | 83.70 |
 | 1 | 50 50 | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.64 |
 | 1 | 50 50 | TRUE | Similarity | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.47 |
 | 1 | 50 50 | FALSE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.12 |
@@ -207,6 +216,7 @@ Primary metric:
 | 1 | none | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 83.02 |
 | 2 | 50 50 | TRUE | Similarity | 64 | focal | TRUE | TRUE | TRUE | 0.5 | 82.95 |
 | 1 | 50 50 | TRUE | Similarity | 64 | cross entropy | FALSE | FALSE | FALSE | 1 | 82.91 |
+| 2 | 50 50 | FALSE | Similarity | 64 | focal | TRUE | FALSE | TRUE | 0.5 | 82.90 |
 | 1 | uniform | TRUE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 82.86 |
 | 3 | 50 50 | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 82.76 |
 | 1 | uniform | FALSE | none | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 82.73 |
@@ -231,13 +241,21 @@ Primary metric:
 | 1 | none | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 68.25 |
 | 1 | none | FALSE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 68.25 |
 | 3 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 58.39 |
-| 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 57.6 |
-| 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 57.6 |
+| 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 57.60 |
+| 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 57.60 |
 | 3 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 57.49 |
 | 3 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 57.49 |
 | 2 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 56.64 |
 | 2 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 56.64 |
 | 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 56.36 |
+| 1 | 50 50 | TRUE | Triplet | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 56.36 |
+| 3 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 56.05 |
+| 3 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 56.05 |
+| 2 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 55.97 |
+| 2 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 55.97 |
+| 2 | 50 50 | TRUE | Similarity | 32 | cross entropy | FALSE | FALSE | FALSE | 1 | 55.89 |
+| 2 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 55.48 |
+| 1 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 55.36 |
 
 ## 6\. Ablation Study
 
@@ -246,7 +264,7 @@ Primary metric:
 From the Section 5.3 table, the best recorded configuration is:
 
 - Heads \= `2`  
-- Sampler \= `50 50`  
+- Sampler \= `uniform`  
 - Freeze Backbone \= `FALSE`  
 - Metric Loss \= `Similarity`  
 - Batch Size \= `64`  
@@ -255,17 +273,17 @@ From the Section 5.3 table, the best recorded configuration is:
 - Data Augmentation \= `TRUE`  
 - Test-Time Augmentation \= `TRUE`  
 - Metric Weight \= `0.5`  
-- **Ensemble Test F1 \= 91.90**
+- **Ensemble Test F1 \= 93.85**
 
 ### 6.2 Head Ablation
 
 Using the best score achieved per head value in Section 5.3:
 
-- **Head 1 best**: `88.97`  
-- **Head 2 best**: `91.90`  
+- **Head 1 best**: `90.47`  
+- **Head 2 best**: `93.85`  
 - **Head 3 best**: `88.81`
 
-Conclusion: all three heads can perform strongly, but the 2-head configuration reaches the highest final score.
+Conclusion: all heads can produce competitive results, but head `2` is clearly strongest in this table.
 
 ### 6.3 Metric-Loss Ablation
 
@@ -275,7 +293,14 @@ Controlled comparison at (`Heads=2`, `Sampler=50 50`, `Freeze=FALSE`, `Batch=32`
 - `Triplet`: `87.46` (also `87.25` in another repeated run)  
 - `Similarity`: `86.38` (also `86.23` in another repeated run)
 
-Interpretation: both metric-learning modes outperform `none` in this matched setup. Triplet is slightly higher than Similarity here, but Similarity reaches the global best under richer regularization settings (focal + smoothing + augmentation + TTA).
+Interpretation: both metric-learning modes outperform `none` in this matched baseline setup. Triplet is slightly higher than Similarity here.
+
+High-performance regime comparison (`Heads=2`, `Sampler=50 50`, `Freeze=FALSE`, `Batch=64`, `focal`, smoothing+aug+TTA TRUE, `Metric Weight=0.5`):
+
+- `Triplet`: `91.71`  
+- `Similarity`: `92.70`
+
+In the strongest regime, Similarity outperforms Triplet by `+0.99`.
 
 Additional controlled example (`Heads=1`, `Sampler=50 50`, `Freeze=FALSE`, `Batch=32`, `cross entropy`, no smoothing/aug/TTA):
 
@@ -291,13 +316,21 @@ For a controlled subset (`Heads=1`, `Sampler=50 50`, `Freeze=FALSE`, `Similarity
 - Batch `32`: `83.81` (best)  
 - Batch `64`: `80.74`
 
-Conclusion: in this subset, medium batch (`32`) outperforms both smaller and larger alternatives.
+Conclusion: In this subset, medium batch (`32`) outperforms both smaller and larger alternatives.
+
+In the high-performance focal setting for `Heads=2`, `Sampler=50 50`, `Freeze=FALSE`, `Similarity`, smoothing+aug+TTA TRUE (`Metric Weight=0.5`):
+
+- Batch `16`: `92.14`  
+- Batch `32`: `92.51`  
+- Batch `64`: `92.70` (best in this subset)
+
+So the preferred batch size depends on the training regime.
 
 ### 6.5 Freeze Ablation
 
 For matched high-performance settings (`Heads=2`, `Sampler=50 50`, `Similarity`, `Batch=64`, `focal`, smoothing/aug/TTA toggles):
 
-- Example pair (all TRUE): `Freeze=FALSE 91.90` vs `Freeze=TRUE 82.95` (`+8.95` for no-freeze)  
+- Example pair (all TRUE): `Freeze=FALSE 92.70` vs `Freeze=TRUE 82.95` (`+9.75` for no-freeze)  
 - Example pair (TTA FALSE): `89.57` vs `82.59` (`+6.98`)  
 - Example pair (Aug FALSE, TTA TRUE): `88.91` vs `77.09` (`+11.82`)
 
@@ -305,13 +338,13 @@ Conclusion: under these settings, training the backbone consistently outperforms
 
 ### 6.6 Sampling Ablation
 
-Sampling coverage in Section 5.3 includes all three samplers (`50 50`, `none`, `uniform`), but repeated rows and run variance make strict one-to-one comparison noisy.
+Sampling coverage in Section 5.3 includes all three samplers (`50 50`, `none`, `uniform`), but repeated rows and run variance make a strict one-to-one comparison noisy.
 
 Top observed score per sampler:
 
-- `50 50`: `91.90`  
+- `50 50`: `92.70`  
 - `none`: `88.63`  
-- `uniform`: `87.43`
+- `uniform`: `93.85`
 
 In repeated `none` rows (for example, `Heads=1`, `Triplet`, `Batch=32`, `Freeze=FALSE`), scores vary substantially (`88.63`, `83.02`, `68.25`), indicating sensitivity to run conditions and/or logging duplication.
 
@@ -333,11 +366,16 @@ The highest scores are concentrated in the `focal + smoothing + augmentation + T
 
 ## 
 
+## 
+
 ## 7\. What Did Not Work (Optional)
 
 - The initial patch-CNN baseline was fast to prototype but underpowered for hard generalization.  
-- Large broad grid scripts accumulated code complexity and branch divergence, making it harder to maintain one clean experiment source of truth.  
-- Some exploratory scripts contain logic bugs or inconsistent variables, so final reporting should rely on the stable script path.
+- Large, broad grid scripts accumulated code complexity and branch divergence, making it harder to maintain one clean experiment source of truth.  
+- Some exploratory scripts contain logic bugs or inconsistent variables, so final reporting should rely on the stable script path.  
+- A purely threshold-based Out-of-Distribution (OOD) detector failed on organic occlusions, such as hands (as seen in the photo). Because our 96x96 crops overlap adjacent squares, true empty squares often contain edges of neighboring pieces, dropping their confidence to \~65% in such cases (e.g., h1 or e1 as seen in the photo). Meanwhile, smooth skin lacks edges, causing the network to incorrectly classify it as 'Empty' with \>70% confidence. This proved that organic OOD objects cannot be filtered by confidence thresholds alone, as the closed-world assumption forces the network to map featureless anomalies to the 'Empty' class. This led us to consider asymmetric thresholds that treat empty and occupied tiles differently. Following that, we set OOD as sub-45% ‘Empty’-classified tiles.
+
+![][image1]
 
 ## 8\. Discussion / Limitations (Optional but Recommended)
 
@@ -357,7 +395,7 @@ The highest scores are concentrated in the `focal + smoothing + augmentation + T
 - Add board-consistency postprocessing with chess-rule priors.  
 - Expand data diversity and viewpoint augmentation.  
 - Apply confidence calibration and uncertainty-aware outputs.  
-- Evaluate stronger backbones (for example lightweight ViT variants) under the same split protocol.
+- Evaluate stronger backbones (for example, lightweight ViT variants) under the same split protocol.
 
 ## 9\. References
 
@@ -371,5 +409,5 @@ The highest scores are concentrated in the `focal + smoothing + augmentation + T
 ## Reproducibility Notes (Appendix)
 
 - Main run command: `python experiment114.py`  
-- OOD inspection: `python inference_using_kfold.py --models_path <path> --heads <1|2|3> --dataset_path assets/new_dataset --threshold 0.5`  
+- OOD inspection: `python inference_using_kfold.py --models_path <path> --heads <1|2|3> --dataset_path assets/new_dataset --threshold 0.45`  
 - Baseline training/evaluation scripts are available in `train.py`, `train_v2.py`, `evaluate.py`, and `evaluate_v2.py`.

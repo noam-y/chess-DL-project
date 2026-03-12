@@ -60,7 +60,7 @@ def evaluate_ensemble_on_test(
     config_dir: Path,
     test_game_name: str,
     device: torch.device,
-    test_aug: bool = False,
+    test_aug: bool = True,
 ) -> dict[str, object]:
     data_dir = "assets/dataset"
     test_ds = GridDataset(data_dir, mode="test", test_game=test_game_name)

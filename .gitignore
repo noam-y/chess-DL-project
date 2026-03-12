@@ -2,8 +2,6 @@
 assets/
 
 # Ignore the saved model weights and experiment folders
-SUPER_SEARCH_9001_results/
-baby_grid_results/
 *.pth
 
 # Ignore Slurm output log files

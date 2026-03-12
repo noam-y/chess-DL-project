@@ -76,9 +76,10 @@ python evaluate.py --model_path checkpoints/model_epoch_10.pth --test_dir aug/ne
 
 
 new from the beggining:
-
-git clone https://github.com/noam-y/chess-DL-project/tree/master
+  
+git clone https://github.com/noam-y/chess-DL-project
 cd chess-DL-project
+
 pip install -r requirements.txt
 python setup_dataset.py
 python preprocess_dataset.py
