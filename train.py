@@ -318,7 +318,7 @@ def main():
     print(f"Starting training on {device}...")
 
     # Fixed configuration based on final experiment conclusion.
-    sampling = "50_50"
+    sampling = "uniform"
     batch_size = 64
     smoothing = True
     data_aug = True
@@ -329,14 +329,10 @@ def main():
         f"H2_S-{sampling}_T-new_B-{batch_size}_L-focal_SM-{smoothing}_"
         f"F-False_DA-{data_aug}_MW-{metric_weight}"
     )
-    print(f"\n{'=' * 60}\nFixed configuration: {config_name}\n{'=' * 60}")
 
     config_dir = os.path.join(output_base, config_name)
     os.makedirs(config_dir, exist_ok=True)
 
-    fold_f1_scores = []
-    fold_epochs = {}
-    fold_scores = {}
     best_overall_f1 = float("-inf")
 
     for val_game in all_games:
@@ -364,11 +360,9 @@ def main():
         early_stopping = EarlyStopping()
 
         best_fold_f1 = 0.0
-        final_epoch = 0
 
-        for epoch in range(1):
+        for epoch in range(100):
             current_epoch = epoch + 1
-            final_epoch = current_epoch
             model.train()
             for batch in tqdm(train_loader, desc=f"Epoch {current_epoch} Train", leave=False):
                 if batch is None:
@@ -421,13 +415,6 @@ def main():
                 print(f"   -> Early stopping triggered at epoch {current_epoch} (Best F1: {best_fold_f1:.2f}%)")
                 break
 
-        fold_epochs[val_game] = final_epoch
-        fold_scores[val_game] = best_fold_f1
-        fold_f1_scores.append(best_fold_f1)
-
-    mean_cv_f1 = np.mean(fold_f1_scores) if fold_f1_scores else 0
-    print(f"\n>>> Mean 4-Fold CV F1: {mean_cv_f1:.2f}%")
-
     result = {
         "Config ID": config_name,
         "Heads": 2,
@@ -439,15 +426,6 @@ def main():
         "Freezing": False,
         "Data Augmentation": data_aug,
         "Metric Weight": metric_weight,
-        "Mean 4-Fold F1": mean_cv_f1,
-        "Epochs game2": fold_epochs.get('game2', 0),
-        "Best F1 game2": fold_scores.get('game2', 0),
-        "Epochs game4": fold_epochs.get('game4', 0),
-        "Best F1 game4": fold_scores.get('game4', 0),
-        "Epochs game6": fold_epochs.get('game6', 0),
-        "Best F1 game6": fold_scores.get('game6', 0),
-        "Epochs game7": fold_epochs.get('game7', 0),
-        "Best F1 game7": fold_scores.get('game7', 0),
     }
     result_df = pd.DataFrame([result])
     result_df.to_csv(os.path.join(output_base, "FINAL_RESULTS_train.csv"), index=False)
