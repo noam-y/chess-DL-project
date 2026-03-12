@@ -1,8 +1,16 @@
 # Chessboard State Prediction from a Single RGB Image
 
+## Project Team and Links
+
+- Professor: Oren Freifeld
+- TA: Roy Amoyal
+- Authors: Noam Jehoshua, Michael Bauer, Nir Horovitz
+- Project Website: [huggingface](https://huggingface.co/spaces/NoamNirMichael/photo2fenn)
+- GitHub Repository: [github](https://github.com/noam-y/chess-DL-project/tree/master)
+
 ## 1\. Abstract
 
-This project addresses automatic chessboard state prediction from a single RGB image by classifying all 64 squares and reconstructing board state. We developed and compared multiple pipelines, starting from a patch-based CNN baseline and progressing to a configurable multi-head ResNet-18 model [1] with metric-learning regularization [2, 3] and fold-wise ensembling. The final training protocol uses game-based cross-validation, weighted sampling to reduce class imbalance, and a held-out unseen game for final testing. Our primary metric is macro F1, chosen to prevent inflated performance from dominant empty-square classes. The resulting framework is robust, reproducible, and aligned with the official course submission requirements.
+This project addresses automatic chessboard state prediction from a single RGB image by classifying all 64 squares and reconstructing board state. We developed and compared multiple pipelines, starting from a patch-based CNN baseline and progressing to a configurable multi-head ResNet-18 model \[1\] with metric-learning regularization \[2, 3\] and fold-wise ensembling. The final training protocol uses game-based cross-validation, weighted sampling to reduce class imbalance, and a held-out unseen game for final testing. Our primary metric is macro F1, chosen to prevent inflated performance from dominant empty-square classes. The resulting framework is robust, reproducible, and aligned with the official course submission requirements.
 
 ## ---
 
@@ -39,9 +47,9 @@ Our goal is to improve class-balanced recognition and cross-game generalization,
 
 This project builds on three relevant directions:
 
-1. **CNN classification for local image patches**, used in our early baseline (`train.py`).  
-2. **Residual transfer learning (ResNet-18)**, used as the main backbone in the advanced pipeline (`experiment114.py`, `experiment2.py`, `SUPER_SEARCH_9001.py`) [1].  
-3. **Metric learning for embedding separation**, including triplet-style and multi-similarity losses [2, 3].
+1. **CNN classification for local image patches**, used in our early baseline.  
+2. **Residual transfer learning (ResNet-18)**, used as the main backbone in the advanced pipeline.  
+3. **Metric learning for embedding separation**, including triplet-style and multi-similarity losses.
 
 Compared with end-to-end board detectors or transformer pipelines, our approach emphasizes controlled per-square classification with explicit label structure (occupancy and piece identity decomposition), which matches the available labels and training organization in this repository.
 
@@ -75,7 +83,7 @@ This split reduces leakage compared with random frame-level splits.
 
 ### 4.3 Model Architecture
 
-The core model is `ConfigurableChessResNet`, based on ImageNet-pretrained ResNet-18 backbone [1], with alternative heads:
+The core model is `ConfigurableChessResNet`, based on ImageNet-pretrained ResNet-18 backbone, with alternative heads:
 
 - **1-head**: direct 13-class logits.  
 - **2-head**: occupancy (2-class) \+ piece identity (12-class).  
@@ -87,7 +95,7 @@ This decomposition helps separate easy/global decisions (empty vs occupied) from
 
 ### 4.4 Training Procedure
 
-Core configuration used in the focused experiment branch (implemented with PyTorch APIs [4]):
+Core configuration used in the focused experiment branch (implemented with PyTorch APIs \[4\]):
 
 - optimizer: Adam (`lr=1e-4`, `weight_decay=1e-4`)  
 - scheduler: `ReduceLROnPlateau` on validation macro F1  
@@ -104,14 +112,14 @@ Total loss combines classification and optional metric regularization:
 
 - cross-entropy for occupancy and piece heads,  
 - plus one metric term:  
-  - hard triplet-style margin loss [2],  
-  - multi-similarity loss on normalized embeddings [3].
+  - hard triplet-style margin loss,  
+  - multi-similarity loss on normalized embeddings.
 
 Metric terms are applied only on occupied-square subsets (and color-conditional subsets when relevant).
 
 ### 4.6 Class Imbalance Handling
 
-We use `WeightedRandomSampler` with a `50_50` mode that balances empty vs non-empty mass. This increases the learning signal for rare piece classes and improves macro-oriented metrics.
+We use `WeightedRandomSampler` with a `50-50` mode that balances empty vs non-empty mass. This increases the learning signal for rare piece classes and improves macro-oriented metrics.
 
 ### 4.7 Ensemble Inference
 
@@ -128,14 +136,14 @@ For each configuration, fold-best checkpoints are loaded and their probabilities
 The quantitative table in Section 5.3 reflects the following actual experiment dimensions:
 
 - **Heads**: `1`, `2`, `3`  
-- **Sampler**: `50 50`, `none`, `uniform`  
+- **Sampler**: `50-50`, `none`, `uniform`  
 - **Freeze Backbone**: `TRUE`, `FALSE`  
 - **Metric Loss**: `none`, `Triplet`, `Similarity`  
 - **Batch Size**: `16`, `32`, `64`  
 - **Classification Loss**: `cross entropy`, `focal`  
 - **Label Smoothing**: `TRUE`, `FALSE`  
 - **Data Augmentation**: `TRUE`, `FALSE`  
-- **Test-Time Augmentation (TTA)**: `TRUE`, `FALSE`  
+- **Test-Time Augmentation**: `TRUE`, `FALSE`  
 - **Metric Weight**: `0.25`, `0.5`, `0.75`, `1`
 
 ### 5.2 Evaluation Metrics
@@ -144,7 +152,8 @@ Primary metric:
 
 **Macro F1 (%)** at square level (class-balanced)
 
-- F1 is a standard machine-learning metric, defined as: `F1 = 2 * (Precision * Recall) / (Precision + Recall)`.  
+- F1 is a standard machine-learning metric , defined as:   
+  `F1 = 2 * (Precision * Recall) / (Precision + Recall)`.  
   - We treat each square prediction as one classification sample, then compute F1 separately for each class (empty \+ 12 piece classes).  
   - Macro F1 is the unweighted mean of those per-class F1 values, so every class contributes equally.  
   - This is important because empty squares are much more frequent than piece classes; plain accuracy can look high even when rare pieces are predicted poorly.  
@@ -437,4 +446,3 @@ Train the model. 🧠
 
 Evaluate on unseen data. 📊   
 `python evaluate.py`
-
