@@ -40,8 +40,8 @@ Our goal is to improve class-balanced recognition and cross-game generalization,
 This project builds on three relevant directions:
 
 1. **CNN classification for local image patches**, used in our early baseline (`train.py`).  
-2. **Residual transfer learning (ResNet-18)**, used as the main backbone in the advanced pipeline (`experiment114.py`, `experiment2.py`, `SUPER_SEARCH_9001.py`).  
-3. **Metric learning for embedding separation**, including triplet-style and multi-similarity losses.
+2. **Residual transfer learning (ResNet-18)**, used as the main backbone in the advanced pipeline (`experiment114.py`, `experiment2.py`, `SUPER_SEARCH_9001.py`) [1].  
+3. **Metric learning for embedding separation**, including triplet-style and multi-similarity losses [2, 3].
 
 Compared with end-to-end board detectors or transformer pipelines, our approach emphasizes controlled per-square classification with explicit label structure (occupancy and piece identity decomposition), which matches the available labels and training organization in this repository.
 
@@ -75,7 +75,7 @@ This split reduces leakage compared with random frame-level splits.
 
 ### 4.3 Model Architecture
 
-The core model is `ConfigurableChessResNet`, based on ImageNet-pretrained ResNet-18 backbone, with alternative heads:
+The core model is `ConfigurableChessResNet`, based on ImageNet-pretrained ResNet-18 backbone [1], with alternative heads:
 
 - **1-head**: direct 13-class logits.  
 - **2-head**: occupancy (2-class) \+ piece identity (12-class).  
@@ -88,6 +88,8 @@ This decomposition helps separate easy/global decisions (empty vs occupied) from
 ### 4.4 Training Procedure
 
 Core configuration used in the focused experiment branch:
+
+Implementation uses PyTorch training and data APIs [4].
 
 - optimizer: Adam (`lr=1e-4`, `weight_decay=1e-4`)  
 - scheduler: `ReduceLROnPlateau` on validation macro F1  
@@ -104,8 +106,8 @@ Total loss combines classification and optional metric regularization:
 
 - cross-entropy for occupancy and piece heads,  
 - plus one metric term:  
-  - hard triplet-style margin loss,  
-  - multi-similarity loss on normalized embeddings.
+  - hard triplet-style margin loss [2],  
+  - multi-similarity loss on normalized embeddings [3].
 
 Metric terms are applied only on occupied-square subsets (and color-conditional subsets when relevant).
 
@@ -144,7 +146,7 @@ Primary metric:
 
 **Macro F1 (%)** at square level (class-balanced)
 
-- F1 is a standard machine-learning metric , defined as: `F1 = 2 * (Precision * Recall) / (Precision + Recall)`.  
+- F1 is a standard machine-learning metric, defined as: `F1 = 2 * (Precision * Recall) / (Precision + Recall)`.  
   - We treat each square prediction as one classification sample, then compute F1 separately for each class (empty \+ 12 piece classes).  
   - Macro F1 is the unweighted mean of those per-class F1 values, so every class contributes equally.  
   - This is important because empty squares are much more frequent than piece classes; plain accuracy can look high even when rare pieces are predicted poorly.  
@@ -348,7 +350,7 @@ Top observed score per sampler:
 
 In repeated `none` rows (for example, `Heads=1`, `Triplet`, `Batch=32`, `Freeze=FALSE`), scores vary substantially (`88.63`, `83.02`, `68.25`), indicating sensitivity to run conditions and/or logging duplication.
 
-### 6.7 Additional Ablations Present in CSV
+### 6.7 Additional Ablations Present
 
 The final results table also includes extra factors beyond the original grid:
 
@@ -399,10 +401,10 @@ The highest scores are concentrated in the `focal + smoothing + augmentation + T
 
 ## 9\. References
 
-1. He, K., Zhang, X., Ren, S., Sun, J. Deep Residual Learning for Image Recognition. CVPR, 2016\.  
-2. Schroff, F., Kalenichenko, D., Philbin, J. FaceNet: A Unified Embedding for Face Recognition and Clustering. CVPR, 2015\.  
-3. Wang, X., Han, X., Huang, W., Dong, D., Scott, M. R. Multi-Similarity Loss with General Pair Weighting for Deep Metric Learning. CVPR, 2019\.  
-4. PyTorch Documentation. [https://pytorch.org](https://pytorch.org)
+1. He, K., Zhang, X., Ren, S., Sun, J. Deep Residual Learning for Image Recognition. CVPR, 2016.  
+2. Schroff, F., Kalenichenko, D., Philbin, J. FaceNet: A Unified Embedding for Face Recognition and Clustering. CVPR, 2015.  
+3. Wang, X., Han, X., Huang, W., Dong, D., Scott, M. R. Multi-Similarity Loss with General Pair Weighting for Deep Metric Learning. CVPR, 2019.  
+4. PyTorch Documentation. [https://pytorch.org](https://pytorch.org). Used for model/training APIs (ResNet, optimizers, scheduler, dataloaders) in implementation.
 
 ---
 
