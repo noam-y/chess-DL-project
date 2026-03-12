@@ -190,7 +190,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--test-aug",
-        action="store_true",
+        default=True,
         help="Enable test-time augmentation for evaluation.",
     )
     return parser.parse_args()
