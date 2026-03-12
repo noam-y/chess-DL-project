@@ -2,7 +2,7 @@
 
 ## 1\. Abstract
 
-This project addresses automatic chessboard state prediction from a single RGB image by classifying all 64 squares and reconstructing board state. We developed and compared multiple pipelines, starting from a patch-based CNN baseline and progressing to a configurable multi-head ResNet-18 model with metric-learning regularization and fold-wise ensembling. The final training protocol uses game-based cross-validation, weighted sampling to reduce class imbalance, and a held-out unseen game for final testing. Our primary metric is macro F1, chosen to prevent inflated performance from dominant empty-square classes. The resulting framework is robust, reproducible, and aligned with the official course submission requirements.
+This project addresses automatic chessboard state prediction from a single RGB image by classifying all 64 squares and reconstructing board state. We developed and compared multiple pipelines, starting from a patch-based CNN baseline and progressing to a configurable multi-head ResNet-18 model [1] with metric-learning regularization [2, 3] and fold-wise ensembling. The final training protocol uses game-based cross-validation, weighted sampling to reduce class imbalance, and a held-out unseen game for final testing. Our primary metric is macro F1, chosen to prevent inflated performance from dominant empty-square classes. The resulting framework is robust, reproducible, and aligned with the official course submission requirements.
 
 ## ---
 
@@ -87,9 +87,7 @@ This decomposition helps separate easy/global decisions (empty vs occupied) from
 
 ### 4.4 Training Procedure
 
-Core configuration used in the focused experiment branch:
-
-Implementation uses PyTorch training and data APIs [4].
+Core configuration used in the focused experiment branch (implemented with PyTorch APIs [4]):
 
 - optimizer: Adam (`lr=1e-4`, `weight_decay=1e-4`)  
 - scheduler: `ReduceLROnPlateau` on validation macro F1  
@@ -113,7 +111,7 @@ Metric terms are applied only on occupied-square subsets (and color-conditional 
 
 ### 4.6 Class Imbalance Handling
 
-We use `WeightedRandomSampler` with a `50_50` mode that balances empty vs non-empty mass. This increases learning signal for rare piece classes and improves macro-oriented metrics.
+We use `WeightedRandomSampler` with a `50_50` mode that balances empty vs non-empty mass. This increases the learning signal for rare piece classes and improves macro-oriented metrics.
 
 ### 4.7 Ensemble Inference
 
@@ -259,6 +257,12 @@ Primary metric:
 | 2 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 55.48 |
 | 1 | 50 50 | TRUE | Similarity | 16 | cross entropy | FALSE | FALSE | FALSE | 1 | 55.36 |
 
+## 
+
+## ---
+
+## 
+
 ## 6\. Ablation Study
 
 ### 6.1 Best Overall Configuration
@@ -332,9 +336,9 @@ So the preferred batch size depends on the training regime.
 
 For matched high-performance settings (`Heads=2`, `Sampler=50 50`, `Similarity`, `Batch=64`, `focal`, smoothing/aug/TTA toggles):
 
-- Example pair (all TRUE): `Freeze=FALSE 92.70` vs `Freeze=TRUE 82.95` (`+9.75` for no-freeze)  
-- Example pair (TTA FALSE): `89.57` vs `82.59` (`+6.98`)  
-- Example pair (Aug FALSE, TTA TRUE): `88.91` vs `77.09` (`+11.82`)
+- Example pair : `Freeze=FALSE 92.70` vs `Freeze=TRUE 82.95` (`+9.75` for no-freeze)  
+- Example pair: `89.57` vs `82.59` (`+6.98`)  
+- Example pair: `88.91` vs `77.09` (`+11.82`)
 
 Conclusion: under these settings, training the backbone consistently outperforms frozen-backbone runs.
 
@@ -364,16 +368,14 @@ The highest scores are concentrated in the `focal + smoothing + augmentation + T
 
 ### 6.8 Notes on Data Quality
 
-`FINAL_RESULTS_ALL.csv` contains repeated configurations with different scores (duplicate rows or repeated keys). Therefore, conclusions are reported using explicit controlled comparisons and best-score summaries, not only single-row rank ordering.
+There are repeated configurations with different scores (duplicate rows or repeated keys). Therefore, conclusions are reported using explicit controlled comparisons and best-score summaries, not only single-row rank ordering.
 
-## 
-
-## 
+---
 
 ## 7\. What Did Not Work (Optional)
 
 - The initial patch-CNN baseline was fast to prototype but underpowered for hard generalization.  
-- Large, broad grid scripts accumulated code complexity and branch divergence, making it harder to maintain one clean experiment source of truth.  
+- Large experiments scripts accumulated code complexity and branch divergence, making it harder to maintain one clean experiment source of truth.  
 - Some exploratory scripts contain logic bugs or inconsistent variables, so final reporting should rely on the stable script path.  
 - A purely threshold-based Out-of-Distribution (OOD) detector failed on organic occlusions, such as hands (as seen in the photo). Because our 96x96 crops overlap adjacent squares, true empty squares often contain edges of neighboring pieces, dropping their confidence to \~65% in such cases (e.g., h1 or e1 as seen in the photo). Meanwhile, smooth skin lacks edges, causing the network to incorrectly classify it as 'Empty' with \>70% confidence. This proved that organic OOD objects cannot be filtered by confidence thresholds alone, as the closed-world assumption forces the network to map featureless anomalies to the 'Empty' class. This led us to consider asymmetric thresholds that treat empty and occupied tiles differently. Following that, we set OOD as sub-45% ‘Empty’-classified tiles.
 
@@ -401,15 +403,38 @@ The highest scores are concentrated in the `focal + smoothing + augmentation + T
 
 ## 9\. References
 
-1. He, K., Zhang, X., Ren, S., Sun, J. Deep Residual Learning for Image Recognition. CVPR, 2016.  
-2. Schroff, F., Kalenichenko, D., Philbin, J. FaceNet: A Unified Embedding for Face Recognition and Clustering. CVPR, 2015.  
-3. Wang, X., Han, X., Huang, W., Dong, D., Scott, M. R. Multi-Similarity Loss with General Pair Weighting for Deep Metric Learning. CVPR, 2019.  
-4. PyTorch Documentation. [https://pytorch.org](https://pytorch.org). Used for model/training APIs (ResNet, optimizers, scheduler, dataloaders) in implementation.
+1. He, K., Zhang, X., Ren, S., Sun, J. Deep Residual Learning for Image Recognition. CVPR, 2016\.  
+2. Schroff, F., Kalenichenko, D., Philbin, J. FaceNet: A Unified Embedding for Face Recognition and Clustering. CVPR, 2015\.  
+3. Wang, X., Han, X., Huang, W., Dong, D., Scott, M. R. Multi-Similarity Loss with General Pair Weighting for Deep Metric Learning. CVPR, 2019\.  
+4. PyTorch Documentation. [https://pytorch.org](https://pytorch.org)
 
 ---
 
+## 
+
 ## Reproducibility Notes (Appendix)
 
-- Main run command: `python experiment114.py`  
-- OOD inspection: `python inference_using_kfold.py --models_path <path> --heads <1|2|3> --dataset_path assets/new_dataset --threshold 0.45`  
-- Baseline training/evaluation scripts are available in `train.py`, `train_v2.py`, `evaluate.py`, and `evaluate_v2.py`.
+Connect to the BGU cluster. 🔐   
+`ssh <your_username>@slurm.bgu.ac.il`
+
+Clone the repository. 📦  
+ `git clone https://github.com/noam-y/chess-DL-project cd chess-DL-project`
+
+Install dependencies. 🧩   
+`pip install -r requirements.txt`
+
+Download and extract the dataset. 📥   
+`python setup_dataset.py`
+
+Preprocess the dataset. 🛠️   
+`python preprocess_dataset.py`
+
+Request a GPU session on the cluster. 🚀   
+`srun --partition=course --qos=course --gres=gpu:rtx_3090:1 --time=04:00:00 --pty bash -i`
+
+Train the model. 🧠   
+`python train.py`
+
+Evaluate on unseen data. 📊   
+`python evaluate.py`
+
