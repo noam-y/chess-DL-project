@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, WeightedRandomSampler, default_collate, Dataset
 import numpy as np
 import pandas as pd
+import argparse
 from tqdm import tqdm
 from collections import Counter
 from sklearn.metrics import f1_score
@@ -76,7 +77,7 @@ class RandomBlackenEdges:
 
 # --- CUSTOM ROBUST DATASET ---
 class GridDataset(Dataset):
-    def __init__(self, data_dir, mode='train', val_game=None, test_game='game5', data_aug=False):
+    def __init__(self, data_dir, mode='train', val_game=None, test_game=None, data_aug=False):
         self.data_dir = data_dir
         self.samples = []
         self.all_labels = []
@@ -307,9 +308,12 @@ def build_optimizer(model, lr=1e-4, weight_decay=1e-4):
     )
 
 
-# --- MAIN TRAINING PIPELINE (fixed config) ---
+# --- MAIN TRAINING PIPELINE ---
 def main():
-    data_dir = "assets/dataset"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, default="assets/dataset", help="Path to training data")
+    args = parser.parse_args()
+    data_dir = args.data_dir
     output_base = "train_results"
     os.makedirs(output_base, exist_ok=True)
     final_model_path = os.path.join(output_base, "BEST_MODEL_train.pth")
@@ -324,7 +328,10 @@ def main():
     data_aug = True
     metric_weight = 0.5
 
-    all_games = ['game2', 'game4', 'game6', 'game7']
+    # Dynamically find all 5 (or more) games in the dataset directory
+    all_games = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d)) and d.startswith('game')]
+    all_games.sort() # Keeps them in a neat order
+
     config_name = (
         f"H2_S-{sampling}_T-new_B-{batch_size}_L-focal_SM-{smoothing}_"
         f"F-False_DA-{data_aug}_MW-{metric_weight}"
